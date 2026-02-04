@@ -1,0 +1,20 @@
+{
+  "projects": [
+    {
+      "id": "328b87e0-8d36-465e-852f-4c99f6efdf30",
+      "name": "amfj",
+      "cwd": "/Users/abhishekray/Projects/asset-management-jira",
+      "createdAt": "2026-02-04T22:32:03.667Z"
+    }
+  ],
+  "sessions": [
+    {
+      "id": "572cff5e-7a33-46fb-b8bc-96f97d076d3d",
+      "projectId": "328b87e0-8d36-465e-852f-4c99f6efdf30",
+      "name": "u1",
+      "claudeSessionId": null,
+      "status": "running",
+      "createdAt": "2026-02-04T22:32:11.658Z"
+    }
+  ]
+}

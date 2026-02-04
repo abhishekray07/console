@@ -62,20 +62,52 @@
     term = new Terminal({
       cursorBlink: true,
       fontSize: 14,
-      fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', Menlo, monospace",
+      fontFamily: "Menlo, Monaco, 'Courier New', monospace",
+      fontWeight: '400',
+      fontWeightBold: '600',
+      lineHeight: 1.2,
+      letterSpacing: 0,
+      allowTransparency: false,
       theme: {
-        background: '#000000',
-        foreground: '#e0e0e0',
+        background: '#1a1a2e',
+        foreground: '#d4d4d4',
         cursor: '#e94560',
+        cursorAccent: '#1a1a2e',
+        selectionBackground: '#3a3a5e',
+        black: '#1a1a2e',
+        red: '#f44747',
+        green: '#4ec9b0',
+        yellow: '#dcdcaa',
+        blue: '#569cd6',
+        magenta: '#c586c0',
+        cyan: '#9cdcfe',
+        white: '#d4d4d4',
+        brightBlack: '#6b7280',
+        brightRed: '#f44747',
+        brightGreen: '#4ec9b0',
+        brightYellow: '#dcdcaa',
+        brightBlue: '#569cd6',
+        brightMagenta: '#c586c0',
+        brightCyan: '#9cdcfe',
+        brightWhite: '#ffffff',
       },
     });
 
     fitAddon = new FitAddon.FitAddon();
     const webLinksAddon = new WebLinksAddon.WebLinksAddon();
+    const webglAddon = new WebglAddon.WebglAddon();
 
     term.loadAddon(fitAddon);
     term.loadAddon(webLinksAddon);
     term.open(terminalEl);
+
+    // WebGL addon for sharper rendering on high-DPI displays
+    try {
+      term.loadAddon(webglAddon);
+    } catch (e) {
+      console.warn('WebGL addon failed, using canvas renderer');
+    }
+
     fitAddon.fit();
 
     term.onData((data) => {
