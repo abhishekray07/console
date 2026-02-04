@@ -40,8 +40,8 @@ describe('Store', () => {
   beforeEach(async () => {
     // Clean up before each test
     try { fs.unlinkSync(STORE_PATH); } catch { /* ignore */ }
-    // Re-import to get fresh module state
-    const mod = await import('../store.js?t=' + Date.now());
+    // Re-import to get fresh module state (use crypto.randomUUID for unique cache key)
+    const mod = await import(`../store.js?t=${crypto.randomUUID()}`);
     load = mod.load;
     save = mod.save;
   });
@@ -231,8 +231,8 @@ In `server.js`, add after line 29 (`app.use(express.static(...))`):
       return res.status(400).json({ error: 'Path does not exist' });
     }
 
-    // Security: must be under homedir
-    if (!resolved.startsWith(homedir)) {
+    // Security: must be under homedir (use path.sep to prevent prefix bypass e.g. /Users/abh vs /Users/abh2)
+    if (resolved !== homedir && !resolved.startsWith(homedir + path.sep)) {
       return res.status(403).json({ error: 'Access denied' });
     }
 
@@ -286,6 +286,8 @@ git commit -m "feat: add /api/browse endpoint for directory navigation"
 
 This is the largest backend task. Replace the flat sessions array with `{ projects, sessions }` from the new store, and add project CRUD + session CRUD scoped to projects.
 
+**IMPORTANT:** Task 2 added `/api/browse` to server.js. When rewriting the REST API section, preserve the browse endpoint. Do NOT delete it.
+
 **Files:**
 - Modify: `server.js` (lines 11, 24-25, 33-35, 47-58, 60-108, 112-200, 204-218, 303-318)
 - Modify: `test/server.test.js` (entire file)
@@ -314,12 +316,14 @@ describe('Projects API', () => {
     await server.destroy();
   });
 
-  it('GET /api/projects returns empty array initially', async () => {
+  it('GET /api/projects returns empty projects and sessions initially', async () => {
     const res = await fetch(`${baseUrl}/api/projects`);
     assert.strictEqual(res.status, 200);
     const data = await res.json();
-    assert.ok(Array.isArray(data));
-    assert.strictEqual(data.length, 0);
+    assert.ok(Array.isArray(data.projects));
+    assert.ok(Array.isArray(data.sessions));
+    assert.strictEqual(data.projects.length, 0);
+    assert.strictEqual(data.sessions.length, 0);
   });
 
   it('POST /api/projects creates a project', async () => {
@@ -366,7 +370,7 @@ describe('Projects API', () => {
     assert.strictEqual(res.status, 200);
 
     const listRes = await fetch(`${baseUrl}/api/projects`);
-    const projects = await listRes.json();
+    const { projects } = await listRes.json();
     assert.ok(!projects.find((p) => p.id === id));
   });
 
@@ -481,8 +485,9 @@ describe('Sessions API (scoped to projects)', () => {
 
     // Verify project and its sessions are gone from GET /api/projects
     const listRes = await fetch(`${baseUrl}/api/projects`);
-    const projects = await listRes.json();
+    const { projects, sessions } = await listRes.json();
     assert.ok(!projects.find((p) => p.id === proj.id));
+    assert.ok(!sessions.find((s) => s.projectId === proj.id), 'cascade: sessions should be removed');
   });
 });
 ```
@@ -589,7 +594,13 @@ Key changes to `server.js`:
    // --- Projects REST API ---
 
    app.get('/api/projects', (req, res) => {
-     res.json(data.projects);
+     res.json({
+       projects: data.projects,
+       sessions: data.sessions.map((s) => ({
+         ...s,
+         alive: manager.isAlive(s.id),
+       })),
+     });
    });
 
    app.post('/api/projects', (req, res) => {
@@ -722,9 +733,9 @@ Key changes to `server.js`:
        return res.status(400).json({ error: 'Project directory no longer exists' });
      }
 
-     if (manager.isAlive(session.id)) {
-       manager.kill(session.id);
-     }
+     // Always kill — even exited processes remain in PtyManager's map and
+     // would cause spawn() to throw "Session already exists"
+     manager.kill(session.id);
 
      session.status = 'running';
      persist();
@@ -1080,6 +1091,12 @@ body {
 }
 .inline-session-input:focus { border-color: #e94560; }
 
+.inline-error {
+  padding: 4px 16px 4px 30px;
+  font-size: 11px;
+  color: #e94560;
+}
+
 /* --- Main area --- */
 
 #terminal-container {
@@ -1410,6 +1427,12 @@ Replace entire `public/app.js`:
         case 'state':
           projects = msg.projects;
           sessions = msg.sessions;
+          // Reconcile: if active session no longer exists, return to home
+          if (activeSessionId && !sessions.find((s) => s.id === activeSessionId)) {
+            activeSessionId = null;
+            term.reset();
+            noSession.classList.remove('hidden');
+          }
           renderSidebar();
           break;
 
@@ -1457,9 +1480,14 @@ Replace entire `public/app.js`:
   function renderSidebar() {
     projectListEl.innerHTML = '';
 
-    for (const proj of projects) {
+    // Sort projects by createdAt ascending (design spec)
+    const sortedProjects = [...projects].sort((a, b) =>
+      new Date(a.createdAt) - new Date(b.createdAt));
+
+    for (const proj of sortedProjects) {
       const group = document.createElement('div');
       group.className = 'project-group';
+      group.dataset.projectId = proj.id;
 
       // Project header
       const header = document.createElement('div');
@@ -1623,7 +1651,15 @@ Replace entire `public/app.js`:
     });
     if (!res.ok) {
       const err = await res.json();
-      alert(err.error || 'Failed to create session');
+      // Show error inline in sidebar near the project's session list
+      const projGroup = projectListEl.querySelector(`[data-project-id="${projectId}"]`);
+      if (projGroup) {
+        const errEl = document.createElement('div');
+        errEl.className = 'inline-error';
+        errEl.textContent = err.error || 'Failed to create session';
+        projGroup.appendChild(errEl);
+        setTimeout(() => errEl.remove(), 4000);
+      }
       return null;
     }
     const session = await res.json();
@@ -1646,6 +1682,7 @@ Replace entire `public/app.js`:
 
   // --- Directory Browser ---
   let browsePath = '';
+  let homedir = ''; // learned from first /api/browse response
 
   async function loadDir(dirPath) {
     const url = dirPath
@@ -1656,20 +1693,26 @@ Replace entire `public/app.js`:
     const data = await res.json();
     browsePath = data.path;
 
-    // Render breadcrumbs
-    dirBreadcrumbs.innerHTML = '';
-    const homedir = data.path.split('/').slice(0, 3).join('/'); // approximate homedir
-    const segments = data.path.split('/').filter(Boolean);
+    // Learn homedir from default browse (no path param)
+    if (!homedir) homedir = data.path;
 
-    // Add ~ for home
+    // Render breadcrumbs relative to homedir
+    dirBreadcrumbs.innerHTML = '';
+
+    // ~ crumb (always clickable, navigates to homedir)
     const homeSpan = document.createElement('span');
     homeSpan.className = 'breadcrumb';
     homeSpan.textContent = '~';
     homeSpan.onclick = () => loadDir('');
     dirBreadcrumbs.appendChild(homeSpan);
 
-    // Build path segments relative to display
-    let accumulated = '';
+    // Only show segments after the homedir prefix
+    const relativePath = data.path.startsWith(homedir)
+      ? data.path.slice(homedir.length)
+      : data.path;
+    const segments = relativePath.split('/').filter(Boolean);
+
+    let accumulated = homedir;
     for (const seg of segments) {
       accumulated += '/' + seg;
       const sep = document.createElement('span');
@@ -1688,8 +1731,8 @@ Replace entire `public/app.js`:
     // Render directory list
     dirList.innerHTML = '';
 
-    // Parent directory entry
-    if (data.parent) {
+    // Parent directory entry (only if we're deeper than homedir)
+    if (data.parent && data.path !== homedir) {
       const parentLi = document.createElement('li');
       parentLi.textContent = '..';
       parentLi.onclick = () => loadDir(data.parent);
