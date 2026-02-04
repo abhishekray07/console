@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Claude Console</title>
+  <link rel="stylesheet" href="/vendor/xterm.css">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div id="app">
+    <aside id="sidebar">
+      <div id="sidebar-header">
+        <h1>Claude Console</h1>
+        <button id="btn-new" title="New session">+</button>
+      </div>
+      <div id="new-session-form" class="hidden">
+        <input id="input-name" type="text" placeholder="Session name">
+        <input id="input-cwd" type="text" placeholder="Working directory">
+        <div class="form-buttons">
+          <button id="btn-create">Create</button>
+          <button id="btn-cancel">Cancel</button>
+        </div>
+      </div>
+      <ul id="session-list"></ul>
+    </aside>
+    <main id="terminal-container">
+      <div id="terminal"></div>
+      <div id="no-session">
+        <p>No session selected. Create one or click a session to connect.</p>
+      </div>
+    </main>
+  </div>
+
+  <script src="/vendor/xterm.js"></script>
+  <script src="/vendor/xterm-addon-fit.js"></script>
+  <script src="/vendor/xterm-addon-web-links.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>
