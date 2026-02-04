@@ -28,6 +28,53 @@ export function createServer({ testMode = false } = {}) {
   app.use(express.json({ limit: '16kb' }));
   app.use(express.static(path.join(__dirname, 'public')));
 
+  // --- Directory Browser ---
+
+  app.get('/api/browse', async (req, res) => {
+    const homedir = os.homedir();
+    const requestedPath = req.query.path || homedir;
+
+    let resolved;
+    try {
+      resolved = await fs.promises.realpath(requestedPath);
+    } catch {
+      return res.status(400).json({ error: 'Path does not exist' });
+    }
+
+    // Security: must be under homedir (use path.sep to prevent prefix bypass e.g. /Users/abh vs /Users/abh2)
+    if (resolved !== homedir && !resolved.startsWith(homedir + path.sep)) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
+    let stat;
+    try {
+      stat = await fs.promises.stat(resolved);
+    } catch {
+      return res.status(400).json({ error: 'Path does not exist' });
+    }
+
+    if (!stat.isDirectory()) {
+      return res.status(400).json({ error: 'Path is not a directory' });
+    }
+
+    let entries;
+    try {
+      entries = await fs.promises.readdir(resolved, { withFileTypes: true });
+    } catch {
+      return res.status(400).json({ error: 'Cannot read directory' });
+    }
+
+    const dirs = entries
+      .filter((e) => e.isDirectory() && !e.name.startsWith('.'))
+      .map((e) => e.name)
+      .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }))
+      .slice(0, 500);
+
+    const parent = resolved === '/' ? null : path.dirname(resolved);
+
+    res.json({ path: resolved, parent, dirs });
+  });
+
   // --- Helpers ---
 
   function persist() {
