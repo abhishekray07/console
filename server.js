@@ -380,18 +380,21 @@ export function createServer({ testMode = false } = {}) {
           };
           manager.onData(sessionId, dataListener);
 
-          // Replay buffer
+          // Replay buffer in a single message to reduce write-queue churn
           const buffer = manager.getBuffer(sessionId);
-          for (const chunk of buffer) {
-            safeSend(ws, JSON.stringify({ type: 'output', sessionId, data: chunk }));
+          if (buffer.length > 0) {
+            const combined = buffer.join('');
+            safeSend(ws, JSON.stringify({ type: 'output', sessionId, data: combined }));
           }
-          safeSend(ws, JSON.stringify({ type: 'replay-done', sessionId }));
 
           // Flush any data that arrived during replay, then switch to live
           replaying = false;
           for (const d of pendingData) {
             safeSend(ws, JSON.stringify({ type: 'output', sessionId, data: d }));
           }
+
+          // Send replay-done AFTER all data (buffer + pending) is sent
+          safeSend(ws, JSON.stringify({ type: 'replay-done', sessionId }));
           break;
         }
 

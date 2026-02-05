@@ -157,7 +157,14 @@
           break;
 
         case 'replay-done':
-          term.scrollToBottom();
+          if (msg.sessionId === activeSessionId) {
+            // Wait for write pipeline to drain, then wait for render before scrolling
+            term.write('', () => {
+              requestAnimationFrame(() => {
+                term.scrollToBottom();
+              });
+            });
+          }
           break;
 
         case 'state':
