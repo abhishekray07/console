@@ -279,7 +279,7 @@ git commit -m "feat(css): add pulse animation for active session status"
 
 **Step 1: Add sessionIdleState Map**
 
-After line 11 (`let sessions = [];`), add:
+After line 12 (`let expandedProjects = new Set();`), add:
 
 ```javascript
 const sessionIdleState = new Map();
@@ -287,7 +287,7 @@ const sessionIdleState = new Map();
 
 **Step 2: Add updateStatusDot function**
 
-After the `attachSession` function, add:
+After the `attachSession` function (around line 213), add:
 
 ```javascript
 function updateStatusDot(sessionId, idle) {
@@ -300,7 +300,7 @@ function updateStatusDot(sessionId, idle) {
 
 **Step 3: Add session-idle WebSocket handler**
 
-In the WebSocket message switch statement (around line 162), add a new case after `case 'exited'`:
+In the WebSocket message switch statement, add a new case after `case 'exited'` (around line 186):
 
 ```javascript
 case 'session-idle': {
@@ -311,23 +311,38 @@ case 'session-idle': {
 }
 ```
 
-**Step 4: Sync idle state on 'state' message**
+**Step 4: Sync idle state on 'state' message (with full reconciliation)**
 
-In the `case 'state'` handler, after `sessions = msg.sessions;` (line 164), add:
+In the `case 'state'` handler, after `sessions = msg.sessions;` (line 165), add:
 
 ```javascript
+// Reconcile idle state: overwrite with server state and prune stale entries
+const currentSessionIds = new Set(sessions.map(s => s.id));
+for (const [id] of sessionIdleState) {
+  if (!currentSessionIds.has(id)) {
+    sessionIdleState.delete(id);
+  }
+}
 for (const s of sessions) {
-  if (!sessionIdleState.has(s.id) && s.idle !== undefined) {
+  if (s.idle !== undefined) {
     sessionIdleState.set(s.id, s.idle);
   }
 }
 ```
 
-**Step 5: Commit**
+**Step 5: Clean up idle state on session-deleted**
+
+In the `case 'session-deleted'` handler (around line 175), add after the existing code:
+
+```javascript
+sessionIdleState.delete(msg.sessionId);
+```
+
+**Step 6: Commit**
 
 ```bash
 git add public/app.js
-git commit -m "feat(frontend): add idle state tracking and WebSocket handler"
+git commit -m "feat(frontend): add idle state tracking with full reconciliation"
 ```
 
 ---
@@ -335,20 +350,30 @@ git commit -m "feat(frontend): add idle state tracking and WebSocket handler"
 ### Task 7: Update renderSidebar with data-session-id and idle class
 
 **Files:**
-- Modify: `public/app.js` (renderSidebar function, around lines 215-310)
+- Modify: `public/app.js` (renderSidebar function, lines 276-282)
 
 **Step 1: Add data-session-id to session list item**
 
-Find where the session `<li>` is created (around line 275). After `li.className = 'session-item';`, add:
+Find the session `<li>` creation (line 277):
+```javascript
+const li = document.createElement('li');
+```
 
+Add immediately after:
 ```javascript
 li.dataset.sessionId = s.id;
 ```
 
 **Step 2: Update status dot logic**
 
-Find the status dot creation (around line 280). Replace the existing dot class logic with:
+Replace the existing dot creation and class logic (lines 280-282):
+```javascript
+const dot = document.createElement('span');
+dot.className = 'status-dot';
+dot.classList.add(s.alive ? 'alive' : 'exited');
+```
 
+With:
 ```javascript
 const dot = document.createElement('span');
 dot.className = 'status-dot';
