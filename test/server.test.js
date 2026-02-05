@@ -478,3 +478,122 @@ describe('Worktree Session Lifecycle', () => {
     assert.strictEqual(data.ok, true);
   });
 });
+
+describe('Worktree Integration - Full Lifecycle', () => {
+  let server;
+  let baseUrl;
+  let tempDir;
+
+  before(async () => {
+    server = createServer({ testMode: true });
+    await new Promise((resolve) => server.listen(0, resolve));
+    baseUrl = `http://localhost:${server.address().port}`;
+
+    tempDir = createTempRepo();
+  });
+
+  after(async () => {
+    await server.destroy();
+    if (tempDir) cleanupDir(tempDir);
+  });
+
+  it('complete session lifecycle: create -> restart -> archive -> verify', async () => {
+    // Create project
+    const projRes = await fetch(`${baseUrl}/api/projects`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'lifecycle-test', cwd: tempDir }),
+    });
+    assert.strictEqual(projRes.status, 201);
+    const project = await projRes.json();
+
+    // Create session
+    const sessRes = await fetch(`${baseUrl}/api/projects/${project.id}/sessions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'Lifecycle Test' }),
+    });
+    assert.strictEqual(sessRes.status, 201);
+    const session = await sessRes.json();
+    assert.ok(session.branchName);
+    assert.ok(session.worktreePath);
+
+    // Verify worktree exists
+    const worktreePath = path.join(tempDir, session.worktreePath);
+    assert.ok(fs.existsSync(worktreePath), 'worktree should exist after session creation');
+
+    // Create a file in worktree to verify it's a working directory
+    fs.writeFileSync(path.join(worktreePath, 'test.txt'), 'test content');
+
+    // Restart session (should work)
+    const restartRes = await fetch(`${baseUrl}/api/sessions/${session.id}/restart`, {
+      method: 'POST',
+    });
+    assert.strictEqual(restartRes.status, 200);
+
+    // Archive session
+    const archiveRes = await fetch(`${baseUrl}/api/sessions/${session.id}/archive`, {
+      method: 'POST',
+    });
+    assert.strictEqual(archiveRes.status, 200);
+    const archiveData = await archiveRes.json();
+    assert.ok(archiveData.branch);
+
+    // Verify worktree is gone
+    assert.ok(!fs.existsSync(worktreePath), 'worktree should be removed after archive');
+
+    // Verify branch still exists
+    const branches = execSync('git branch', { cwd: tempDir, encoding: 'utf-8' });
+    assert.ok(branches.includes(`claude/${session.branchName}`), 'branch should remain after archive');
+
+    // Verify session is removed from API
+    const listRes = await fetch(`${baseUrl}/api/projects`);
+    const { sessions } = await listRes.json();
+    assert.ok(!sessions.find((s) => s.id === session.id), 'session should be removed from list');
+  });
+
+  it('delete removes both worktree and branch', async () => {
+    // Create project
+    const projRes = await fetch(`${baseUrl}/api/projects`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'delete-lifecycle', cwd: tempDir }),
+    });
+    assert.strictEqual(projRes.status, 201);
+    const project = await projRes.json();
+
+    // Create session
+    const sessRes = await fetch(`${baseUrl}/api/projects/${project.id}/sessions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'Delete Test' }),
+    });
+    assert.strictEqual(sessRes.status, 201);
+    const session = await sessRes.json();
+    const worktreePath = path.join(tempDir, session.worktreePath);
+    const fullBranchName = `claude/${session.branchName}`;
+
+    // Verify worktree and branch exist before delete
+    assert.ok(fs.existsSync(worktreePath), 'worktree should exist before delete');
+    let branches = execSync('git branch', { cwd: tempDir, encoding: 'utf-8' });
+    assert.ok(branches.includes(fullBranchName), 'branch should exist before delete');
+
+    // Delete session
+    const deleteRes = await fetch(`${baseUrl}/api/sessions/${session.id}`, {
+      method: 'DELETE',
+    });
+    assert.strictEqual(deleteRes.status, 200);
+
+    // Verify worktree is gone
+    assert.ok(!fs.existsSync(worktreePath), 'worktree should be removed after delete');
+
+    // Verify branch is also gone
+    branches = execSync('git branch', { cwd: tempDir, encoding: 'utf-8' });
+    assert.ok(!branches.includes(fullBranchName), 'branch should be removed after delete');
+
+    // Verify session is removed from API
+    const listRes = await fetch(`${baseUrl}/api/projects`);
+    const { sessions } = await listRes.json();
+    assert.ok(!sessions.find((s) => s.id === session.id), 'session should be removed from list');
+  });
+});
