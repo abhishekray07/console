@@ -9,6 +9,17 @@ import os from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { PtyManager } from './pty-manager.js';
 import { load, save } from './store.js';
+import {
+  validateGitRepo,
+  validateWorktreesDir,
+  sanitizeBranchName,
+  createWorktree,
+  removeWorktree,
+  worktreeExists,
+  isWorktreeDirty,
+  isWorktreesIgnored,
+  WorktreeDirtyCheckError,
+} from './git-worktree.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -109,8 +120,13 @@ export function createServer({ testMode = false } = {}) {
     const project = data.projects.find((p) => p.id === session.projectId);
     if (!project) throw new Error('Project not found for session');
 
+    // Use worktree path if available (new sessions), otherwise project cwd (backward compat)
+    const cwd = session.worktreePath
+      ? path.join(project.cwd, session.worktreePath)
+      : project.cwd;
+
     const spawnOpts = {
-      cwd: project.cwd,
+      cwd,
       ...(testMode
         ? { shell: '/bin/bash', args: ['-c', 'sleep 3600'] }
         : session.claudeSessionId
@@ -170,7 +186,7 @@ export function createServer({ testMode = false } = {}) {
     });
   });
 
-  app.post('/api/projects', (req, res) => {
+  app.post('/api/projects', async (req, res) => {
     const { name, cwd } = req.body;
     if (!name || typeof name !== 'string' || name.length > MAX_NAME_LENGTH) {
       return res.status(400).json({ error: `name is required (string, max ${MAX_NAME_LENGTH} chars)` });
@@ -188,6 +204,15 @@ export function createServer({ testMode = false } = {}) {
       }
     } catch {
       return res.status(400).json({ error: 'cwd does not exist' });
+    }
+
+    // Validate git repository
+    const gitValidation = await validateGitRepo(resolvedCwd);
+    if (!gitValidation.valid) {
+      return res.status(400).json({
+        error: gitValidation.message,
+        code: gitValidation.code,
+      });
     }
 
     const project = {
@@ -228,7 +253,7 @@ export function createServer({ testMode = false } = {}) {
 
   // --- Sessions REST API ---
 
-  app.post('/api/projects/:id/sessions', (req, res) => {
+  app.post('/api/projects/:id/sessions', async (req, res) => {
     const project = data.projects.find((p) => p.id === req.params.id);
     if (!project) return res.status(404).json({ error: 'project not found' });
 
@@ -245,10 +270,38 @@ export function createServer({ testMode = false } = {}) {
       return res.status(400).json({ error: 'Project directory no longer exists' });
     }
 
+    // Generate session ID and branch name first
+    const sessionId = crypto.randomUUID();
+    const branchName = `${sanitizeBranchName(name)}-${sessionId.slice(0, 7)}`;
+    const worktreePath = `.worktrees/${branchName}`;
+
+    // Create worktree
+    try {
+      await createWorktree(project.cwd, branchName, project.id);
+    } catch (e) {
+      return res.status(400).json({
+        error: e.message,
+        code: e.code || 'WORKTREE_FAILED',
+      });
+    }
+
+    // Check if .worktrees is in .gitignore
+    let worktreeWarning = null;
+    try {
+      const isIgnored = await isWorktreesIgnored(project.cwd);
+      if (!isIgnored) {
+        worktreeWarning = 'Warning: .worktrees/ is not in .gitignore. Add it to avoid committing worktree files.';
+      }
+    } catch {
+      // Ignore check errors
+    }
+
     const session = {
-      id: crypto.randomUUID(),
+      id: sessionId,
       projectId: project.id,
       name,
+      branchName,
+      worktreePath,
       claudeSessionId: null,
       status: 'running',
       createdAt: new Date().toISOString(),
@@ -260,19 +313,63 @@ export function createServer({ testMode = false } = {}) {
     try {
       spawnSession(session);
     } catch (e) {
+      // Clean up worktree on spawn failure
+      try {
+        await removeWorktree(project.cwd, branchName, project.id, { deleteBranch: true });
+      } catch {
+        // Ignore cleanup errors
+      }
+      // Remove session from data
+      const idx = data.sessions.findIndex((s) => s.id === session.id);
+      if (idx !== -1) data.sessions.splice(idx, 1);
+      persist();
       return res.status(500).json({ error: `Failed to spawn: ${e.message}` });
     }
 
     broadcastState();
-    res.status(201).json({ ...session, alive: true });
+    const response = { ...session, alive: true };
+    if (worktreeWarning) {
+      response.warning = worktreeWarning;
+    }
+    res.status(201).json(response);
   });
 
-  app.delete('/api/sessions/:id', (req, res) => {
+  app.delete('/api/sessions/:id', async (req, res) => {
     const idx = data.sessions.findIndex((s) => s.id === req.params.id);
     if (idx === -1) return res.status(404).json({ error: 'not found' });
 
     const session = data.sessions[idx];
+    const project = data.projects.find((p) => p.id === session.projectId);
+    const force = req.query.force === 'true';
+
+    // Check for dirty worktree (if session has one and not forcing)
+    if (!force && session.branchName && project) {
+      try {
+        const dirty = await isWorktreeDirty(project.cwd, session.branchName);
+        if (dirty) {
+          return res.status(400).json({
+            error: 'Worktree has uncommitted changes. Use force=true to delete anyway.',
+            code: 'DIRTY_WORKTREE',
+          });
+        }
+      } catch (e) {
+        // If dirty check fails (e.g., worktree is missing/corrupted), proceed with deletion
+        if (!(e instanceof WorktreeDirtyCheckError)) {
+          throw e;
+        }
+      }
+    }
+
     manager.kill(session.id);
+
+    // Remove worktree and branch
+    if (session.branchName && project) {
+      try {
+        await removeWorktree(project.cwd, session.branchName, project.id, { deleteBranch: true });
+      } catch {
+        // Ignore removal errors - worktree might already be gone
+      }
+    }
 
     const msg = JSON.stringify({ type: 'session-deleted', sessionId: session.id });
     for (const ws of clients) {
@@ -285,7 +382,46 @@ export function createServer({ testMode = false } = {}) {
     res.json({ ok: true });
   });
 
-  app.post('/api/sessions/:id/restart', (req, res) => {
+  // Archive session: remove worktree but keep branch (can recover later)
+  app.post('/api/sessions/:id/archive', async (req, res) => {
+    const idx = data.sessions.findIndex((s) => s.id === req.params.id);
+    if (idx === -1) return res.status(404).json({ error: 'not found' });
+
+    const session = data.sessions[idx];
+    const project = data.projects.find((p) => p.id === session.projectId);
+
+    manager.kill(session.id);
+
+    const fullBranchName = session.branchName ? `claude/${session.branchName}` : null;
+
+    // Remove worktree but keep branch
+    if (session.branchName && project) {
+      try {
+        await removeWorktree(project.cwd, session.branchName, project.id, { deleteBranch: false });
+      } catch {
+        // Ignore removal errors - worktree might already be gone
+      }
+    }
+
+    const msg = JSON.stringify({ type: 'session-deleted', sessionId: session.id });
+    for (const ws of clients) {
+      safeSend(ws, msg);
+    }
+
+    data.sessions.splice(idx, 1);
+    persist();
+    broadcastState();
+
+    res.json({
+      ok: true,
+      branch: fullBranchName,
+      message: fullBranchName
+        ? `Session archived. Branch '${fullBranchName}' preserved for recovery.`
+        : 'Session archived.',
+    });
+  });
+
+  app.post('/api/sessions/:id/restart', async (req, res) => {
     const session = data.sessions.find((s) => s.id === req.params.id);
     if (!session) return res.status(404).json({ error: 'not found' });
 
@@ -298,6 +434,17 @@ export function createServer({ testMode = false } = {}) {
       if (!stat.isDirectory()) throw new Error();
     } catch {
       return res.status(400).json({ error: 'Project directory no longer exists' });
+    }
+
+    // Check worktree exists (if session has one)
+    if (session.branchName) {
+      const exists = await worktreeExists(project.cwd, session.branchName);
+      if (!exists) {
+        return res.status(400).json({
+          error: 'Worktree no longer exists. Session cannot be restarted.',
+          code: 'WORKTREE_MISSING',
+        });
+      }
     }
 
     // Always kill — even exited processes remain in PtyManager's map and
@@ -395,6 +542,17 @@ export function createServer({ testMode = false } = {}) {
 
           // Send replay-done AFTER all data (buffer + pending) is sent
           safeSend(ws, JSON.stringify({ type: 'replay-done', sessionId }));
+
+          // Nudge Claude CLI to re-render by triggering a SIGWINCH via
+          // a tiny resize bounce. Ink (Claude's TUI) listens for this and
+          // repaints, restoring correct cursor position and visibility.
+          if (cols && rows && manager.isAlive(sessionId)) {
+            const nudgeCols = Math.max(cols - 1, 1);
+            manager.resize(sessionId, nudgeCols, rows);
+            setTimeout(() => {
+              manager.resize(sessionId, cols, rows);
+            }, 50);
+          }
           break;
         }
 
