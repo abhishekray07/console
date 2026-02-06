@@ -6,6 +6,7 @@
   "scripts": {
     "start": "node server.js",
     "test": "node --test 'test/*.test.js'",
+    "test:smoke": "node test/smoke-test.mjs",
     "postinstall": "chmod +x node_modules/node-pty/prebuilds/darwin-arm64/spawn-helper 2>/dev/null || true"
   },
   "dependencies": {
@@ -17,6 +18,7 @@
   "devDependencies": {
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/addon-web-links": "^0.12.0",
-    "@xterm/xterm": "^6.0.0"
+    "@xterm/xterm": "^6.0.0",
+    "playwright": "^1.50.0"
   }
 }

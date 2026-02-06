@@ -14,6 +14,9 @@
   let toastTimeout = null;
   let shellTerm = null;
   let shellFitAddon = null;
+  let expandedDirs = new Set(); // tracks expanded directory paths in file tree
+  let openTabs = []; // { id, filename, fullPath, content, type }
+  let activeTabId = 'claude';
 
   // --- DOM refs ---
   const projectListEl = document.getElementById('project-list');
@@ -34,6 +37,15 @@
   const rightPanel = document.getElementById('right-panel');
   const shellTerminalEl = document.getElementById('shell-terminal');
   const rightPanelPath = document.getElementById('right-panel-path');
+  const fileTreeEl = document.getElementById('file-tree');
+  const tabBar = document.getElementById('tab-bar');
+  const tabList = document.getElementById('tab-list');
+  const fileViewer = document.getElementById('file-viewer');
+  const fileViewerPath = document.getElementById('file-viewer-path');
+  const fileViewerRefresh = document.getElementById('file-viewer-refresh');
+  const fileViewerContent = document.getElementById('file-viewer-content');
+  const btnToggleFileTree = document.getElementById('btn-toggle-file-tree');
+  const fileTreeSection = document.getElementById('file-tree-section');
 
   // --- Helpers ---
   function wsSend(data) {
@@ -343,6 +355,10 @@
             term.reset();
             noSession.classList.remove('hidden');
             rightPanel.classList.add('hidden');
+            tabBar.classList.remove('visible');
+            fileViewer.classList.add('hidden');
+            document.getElementById('terminal-wrapper').style.display = '';
+            document.getElementById('terminal-wrapper').style.inset = '0';
           }
           renderSidebar();
           break;
@@ -353,6 +369,10 @@
             term.reset();
             noSession.classList.remove('hidden');
             rightPanel.classList.add('hidden');
+            tabBar.classList.remove('visible');
+            fileViewer.classList.add('hidden');
+            document.getElementById('terminal-wrapper').style.display = '';
+            document.getElementById('terminal-wrapper').style.inset = '0';
           }
           break;
 
@@ -400,6 +420,13 @@
       rightPanel.classList.remove('hidden');
       rightPanelPath.textContent = session.worktreePath || '';
       rightPanelPath.title = session.worktreePath || '';
+
+      // Reset tabs and file tree for new session
+      openTabs = [];
+      activeTabId = 'claude';
+      switchTab('claude');
+      renderTabs();
+      initFileTree();
     } else {
       rightPanel.classList.add('hidden');
     }
@@ -870,6 +897,370 @@
       closeModal();
     }
   };
+
+  // --- File Tree ---
+
+  async function fetchDirEntries(relativePath) {
+    if (!activeSessionId) return { dirs: [], files: [], hasMore: false };
+    const params = new URLSearchParams({ sessionId: activeSessionId });
+    if (relativePath) params.set('path', relativePath);
+    const res = await fetch(`/api/browse?${params}`);
+    if (!res.ok) return { dirs: [], files: [], hasMore: false };
+    const data = await res.json();
+    return {
+      dirs: data.dirs || [],
+      files: data.files || [],
+      hasMore: data.hasMore || false,
+    };
+  }
+
+  async function renderFileTreeDir(container, relativePath, depth) {
+    container.innerHTML = '';
+
+    const loading = document.createElement('div');
+    loading.className = 'file-tree-loading';
+    loading.textContent = 'Loading\u2026';
+    container.appendChild(loading);
+
+    const { dirs, files, hasMore } = await fetchDirEntries(relativePath);
+    container.innerHTML = '';
+
+    const indent = depth * 16;
+
+    // Render directories first
+    for (const dir of dirs) {
+      const dirPath = relativePath ? relativePath + '/' + dir : dir;
+      const item = document.createElement('div');
+
+      const row = document.createElement('div');
+      row.className = 'file-tree-item file-tree-folder';
+      row.style.paddingLeft = indent + 'px';
+
+      const arrow = document.createElement('span');
+      arrow.className = 'file-tree-arrow';
+      arrow.textContent = expandedDirs.has(dirPath) ? '\u25BC' : '\u25B6';
+
+      const label = document.createElement('span');
+      label.className = 'file-tree-label';
+      label.textContent = dir;
+
+      row.appendChild(arrow);
+      row.appendChild(label);
+
+      const children = document.createElement('div');
+      children.className = 'file-tree-children';
+      if (expandedDirs.has(dirPath)) {
+        children.classList.add('expanded');
+        renderFileTreeDir(children, dirPath, depth + 1);
+      }
+
+      row.onclick = () => {
+        if (expandedDirs.has(dirPath)) {
+          expandedDirs.delete(dirPath);
+          arrow.textContent = '\u25B6';
+          children.classList.remove('expanded');
+          children.innerHTML = '';
+        } else {
+          expandedDirs.add(dirPath);
+          arrow.textContent = '\u25BC';
+          children.classList.add('expanded');
+          renderFileTreeDir(children, dirPath, depth + 1);
+        }
+      };
+
+      item.appendChild(row);
+      item.appendChild(children);
+      container.appendChild(item);
+    }
+
+    // Render files
+    for (const file of files) {
+      const filePath = relativePath ? relativePath + '/' + file : file;
+
+      const row = document.createElement('div');
+      row.className = 'file-tree-item';
+      row.style.paddingLeft = (indent + 16) + 'px';
+
+      const label = document.createElement('span');
+      label.className = 'file-tree-label';
+      label.textContent = file;
+      label.title = filePath;
+
+      row.appendChild(label);
+      row.onclick = () => openFileTab(filePath, file);
+      container.appendChild(row);
+    }
+
+    // "Show more" indicator when entries were truncated
+    if (hasMore) {
+      const more = document.createElement('div');
+      more.className = 'file-tree-more';
+      more.style.paddingLeft = indent + 'px';
+      more.textContent = 'More entries not shown\u2026';
+      container.appendChild(more);
+    }
+
+    // Show message if empty
+    if (dirs.length === 0 && files.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'file-tree-loading';
+      empty.textContent = 'Empty directory';
+      container.appendChild(empty);
+    }
+  }
+
+  function initFileTree() {
+    if (!activeSessionId) {
+      fileTreeEl.innerHTML = '';
+      return;
+    }
+    expandedDirs.clear();
+    renderFileTreeDir(fileTreeEl, '', 0);
+  }
+
+  // File tree collapse/expand toggle
+  btnToggleFileTree.onclick = () => {
+    const isCollapsed = fileTreeSection.classList.toggle('collapsed');
+    btnToggleFileTree.innerHTML = isCollapsed ? '&#x25B6;' : '&#x25BC;';
+    btnToggleFileTree.title = isCollapsed ? 'Expand file tree' : 'Collapse file tree';
+    // Refit shell terminal after layout change
+    requestAnimationFrame(() => {
+      if (shellFitAddon) shellFitAddon.fit();
+    });
+  };
+
+  // --- Tab System ---
+
+  function renderTabs() {
+    if (!activeSessionId) {
+      tabBar.classList.remove('visible');
+      return;
+    }
+    tabBar.classList.add('visible');
+    tabList.innerHTML = '';
+
+    // Claude tab (always first, never closeable)
+    const claudeTab = document.createElement('div');
+    claudeTab.className = 'tab' + (activeTabId === 'claude' ? ' active' : '');
+    const claudeLabel = document.createElement('span');
+    claudeLabel.className = 'tab-label';
+    claudeLabel.textContent = 'Claude';
+    claudeTab.appendChild(claudeLabel);
+    claudeTab.onclick = () => switchTab('claude');
+    tabList.appendChild(claudeTab);
+
+    // File tabs
+    for (const tab of openTabs) {
+      const el = document.createElement('div');
+      el.className = 'tab' + (activeTabId === tab.id ? ' active' : '');
+      el.title = tab.fullPath;
+
+      const label = document.createElement('span');
+      label.className = 'tab-label';
+      label.textContent = tab.filename;
+
+      const close = document.createElement('button');
+      close.className = 'tab-close';
+      close.textContent = '\u00D7';
+      close.onclick = (e) => {
+        e.stopPropagation();
+        closeTab(tab.id);
+      };
+
+      el.appendChild(label);
+      el.appendChild(close);
+      el.onclick = () => switchTab(tab.id);
+      tabList.appendChild(el);
+    }
+  }
+
+  function switchTab(tabId) {
+    activeTabId = tabId;
+    renderTabs();
+
+    const termWrapper = document.getElementById('terminal-wrapper');
+
+    if (tabId === 'claude') {
+      // Show terminal, hide file viewer
+      termWrapper.style.display = '';
+      termWrapper.style.inset = '32px 0 0 0';
+      fileViewer.classList.add('hidden');
+      term.focus();
+      // Refit terminal since we changed inset
+      requestAnimationFrame(() => { if (fitAddon) fitAddon.fit(); });
+    } else {
+      // Show file viewer, hide terminal
+      termWrapper.style.display = 'none';
+      fileViewer.classList.remove('hidden');
+
+      const tab = openTabs.find(t => t.id === tabId);
+      if (tab) {
+        renderFileContent(tab);
+      }
+    }
+  }
+
+  function closeTab(tabId) {
+    openTabs = openTabs.filter(t => t.id !== tabId);
+    if (activeTabId === tabId) {
+      activeTabId = openTabs.length > 0 ? openTabs[openTabs.length - 1].id : 'claude';
+    }
+    switchTab(activeTabId);
+  }
+
+  async function openFileTab(filePath, filename) {
+    // Check if already open
+    const existing = openTabs.find(t => t.id === filePath);
+    if (existing) {
+      switchTab(existing.id);
+      return;
+    }
+
+    // Fetch file content
+    const res = await fetch(`/api/file?sessionId=${activeSessionId}&path=${encodeURIComponent(filePath)}`);
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: 'Failed to load file' }));
+      showToast(err.error || 'Failed to load file', 'error');
+      return;
+    }
+
+    const contentType = res.headers.get('content-type') || '';
+    let tab;
+
+    if (contentType.includes('application/json')) {
+      // Binary file response
+      const data = await res.json();
+      if (data.isBinary) {
+        tab = { id: filePath, filename, fullPath: filePath, content: null, type: 'binary' };
+      }
+    } else {
+      const content = await res.text();
+      const ext = filename.split('.').pop().toLowerCase();
+      const type = (ext === 'md' || ext === 'markdown') ? 'markdown' : 'text';
+      tab = { id: filePath, filename, fullPath: filePath, content, type };
+    }
+
+    if (tab) {
+      openTabs.push(tab);
+      switchTab(tab.id);
+    }
+  }
+
+  function renderFileContent(tab) {
+    fileViewerPath.textContent = tab.fullPath;
+    fileViewerContent.innerHTML = '';
+    fileViewerContent.className = '';
+
+    if (tab.type === 'binary') {
+      fileViewerContent.className = 'binary-file';
+      fileViewerContent.textContent = 'Binary file \u2014 not supported';
+      return;
+    }
+
+    if (tab.type === 'markdown') {
+      fileViewerContent.className = 'markdown-body';
+      const rawHtml = marked.parse(tab.content);
+      fileViewerContent.innerHTML = DOMPurify.sanitize(rawHtml);
+      return;
+    }
+
+    // Plain text
+    fileViewerContent.className = 'plain-text';
+    fileViewerContent.textContent = tab.content;
+  }
+
+  // Refresh button handler
+  fileViewerRefresh.onclick = async () => {
+    const tab = openTabs.find(t => t.id === activeTabId);
+    if (!tab || tab.type === 'binary') return;
+
+    const res = await fetch(`/api/file?sessionId=${activeSessionId}&path=${encodeURIComponent(tab.fullPath)}`);
+    if (!res.ok) {
+      showToast('Failed to refresh file', 'error');
+      return;
+    }
+
+    const contentType = res.headers.get('content-type') || '';
+    if (contentType.includes('application/json')) {
+      const data = await res.json();
+      if (data.isBinary) {
+        tab.type = 'binary';
+        tab.content = null;
+      }
+    } else {
+      tab.content = await res.text();
+    }
+
+    renderFileContent(tab);
+  };
+
+  // Keyboard shortcuts (only when terminal is NOT focused)
+  document.addEventListener('keydown', (e) => {
+    const inTerminal = terminalEl.contains(document.activeElement) ||
+                       shellTerminalEl.contains(document.activeElement);
+    if (inTerminal) return;
+
+    if (e.altKey && e.key === 'Tab') {
+      e.preventDefault();
+      const allIds = ['claude', ...openTabs.map(t => t.id)];
+      const idx = allIds.indexOf(activeTabId);
+      const nextIdx = (idx + 1) % allIds.length;
+      switchTab(allIds[nextIdx]);
+    }
+
+    if (e.altKey && e.key === 'w') {
+      e.preventDefault();
+      if (activeTabId !== 'claude') {
+        closeTab(activeTabId);
+      }
+    }
+  });
+
+  // --- Right Panel Divider Drag ---
+
+  const divider = document.getElementById('right-panel-divider');
+  const shellSection = document.getElementById('shell-section');
+
+  let isDragging = false;
+  let rafPending = false;
+
+  divider.addEventListener('mousedown', (e) => {
+    isDragging = true;
+    e.preventDefault();
+    document.body.style.cursor = 'row-resize';
+    document.body.style.userSelect = 'none';
+  });
+
+  document.addEventListener('mousemove', (e) => {
+    if (!isDragging) return;
+    if (rafPending) return; // true single-frame debounce
+
+    rafPending = true;
+    requestAnimationFrame(() => {
+      rafPending = false;
+      const panelRect = rightPanel.getBoundingClientRect();
+      const offset = e.clientY - panelRect.top;
+      const total = panelRect.height;
+      const minHeight = 100;
+
+      if (offset < minHeight || total - offset < minHeight) return;
+
+      const pct = (offset / total) * 100;
+      fileTreeSection.style.flex = `0 0 ${pct}%`;
+
+      if (shellFitAddon) shellFitAddon.fit();
+    });
+  });
+
+  document.addEventListener('mouseup', () => {
+    if (isDragging) {
+      isDragging = false;
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      if (shellFitAddon) shellFitAddon.fit();
+    }
+  });
 
   // --- Init ---
   initTerminal();

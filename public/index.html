@@ -17,20 +17,40 @@
       <div id="project-list"></div>
     </aside>
     <main id="terminal-container">
+      <div id="tab-bar">
+        <div id="tab-list"></div>
+      </div>
       <div id="terminal-wrapper">
         <div id="terminal"></div>
+      </div>
+      <div id="file-viewer" class="hidden">
+        <div id="file-viewer-toolbar">
+          <span id="file-viewer-path"></span>
+          <button id="file-viewer-refresh" title="Refresh">Refresh</button>
+        </div>
+        <div id="file-viewer-content"></div>
       </div>
       <div id="no-session">
         <button id="btn-home-add-project" class="home-add-btn">Add Project</button>
       </div>
     </main>
     <aside id="right-panel" class="hidden">
-      <div class="right-panel-header">
-        <span class="right-panel-title">Terminal</span>
-        <span id="right-panel-path"></span>
+      <div id="file-tree-section">
+        <div class="right-panel-header">
+          <span class="right-panel-title">Files</span>
+          <span id="right-panel-path"></span>
+          <button id="btn-toggle-file-tree" class="panel-toggle" title="Collapse file tree">&#x25BC;</button>
+        </div>
+        <div id="file-tree" class="file-tree-container"></div>
       </div>
-      <div id="shell-terminal-wrapper">
-        <div id="shell-terminal"></div>
+      <div id="right-panel-divider"></div>
+      <div id="shell-section">
+        <div class="right-panel-header">
+          <span class="right-panel-title">Terminal</span>
+        </div>
+        <div id="shell-terminal-wrapper">
+          <div id="shell-terminal"></div>
+        </div>
       </div>
     </aside>
   </div>
@@ -62,6 +82,8 @@
   <script src="/vendor/xterm-addon-fit.js"></script>
   <script src="/vendor/xterm-addon-web-links.js"></script>
   <script src="/vendor/xterm-addon-webgl.js"></script>
+  <script src="/vendor/marked.min.js"></script>
+  <script src="/vendor/purify.min.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>

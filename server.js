@@ -40,6 +40,99 @@ export function createServer({ testMode = false } = {}) {
   app.use(express.json({ limit: '16kb' }));
   app.use(express.static(path.join(__dirname, 'public')));
 
+  // --- Session-scoped file browser (for file tree) ---
+
+  const BROWSE_ENTRY_LIMIT = 200;
+
+  app.get('/api/browse', async (req, res, next) => {
+    const { sessionId } = req.query;
+    if (!sessionId) return next(); // fall through to original /api/browse handler
+
+    const session = store.getSession(sessionId);
+    if (!session) return res.status(404).json({ error: 'Session not found' });
+
+    const project = store.getProject(session.projectId);
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+
+    // Resolve worktree root
+    let worktreeRoot;
+    if (session.worktreePath) {
+      try {
+        worktreeRoot = await resolveWorktreePath(project.cwd, session.worktreePath);
+      } catch {
+        return res.status(400).json({ error: 'Invalid worktree path' });
+      }
+    } else {
+      worktreeRoot = project.cwd;
+    }
+
+    const relativePath = req.query.path || '';
+
+    // Reject absolute paths
+    if (path.isAbsolute(relativePath)) {
+      return res.status(403).json({ error: 'Absolute paths not allowed' });
+    }
+
+    // Reject path traversal
+    const normalized = path.normalize(relativePath || '.');
+    if (normalized === '..' || normalized.startsWith(`..${path.sep}`)) {
+      return res.status(403).json({ error: 'Path traversal not allowed' });
+    }
+
+    const resolved = relativePath ? path.resolve(worktreeRoot, normalized) : worktreeRoot;
+
+    // Symlink-safe validation
+    let realResolved, realRoot;
+    try {
+      realResolved = await fs.promises.realpath(resolved);
+      realRoot = await fs.promises.realpath(worktreeRoot);
+    } catch {
+      return res.status(400).json({ error: 'Path does not exist' });
+    }
+
+    if (realResolved !== realRoot && !realResolved.startsWith(realRoot + path.sep)) {
+      return res.status(403).json({ error: 'Path escapes worktree' });
+    }
+
+    let stat;
+    try {
+      stat = await fs.promises.stat(realResolved);
+    } catch {
+      return res.status(400).json({ error: 'Path does not exist' });
+    }
+
+    if (!stat.isDirectory()) {
+      return res.status(400).json({ error: 'Path is not a directory' });
+    }
+
+    let entries;
+    try {
+      entries = await fs.promises.readdir(realResolved, { withFileTypes: true });
+    } catch {
+      return res.status(400).json({ error: 'Cannot read directory' });
+    }
+
+    const allDirs = entries
+      .filter((e) => e.isDirectory() && !e.name.startsWith('.'))
+      .map((e) => e.name)
+      .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+
+    const allFiles = entries
+      .filter((e) => e.isFile() && !e.name.startsWith('.'))
+      .map((e) => e.name)
+      .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+
+    const totalEntries = allDirs.length + allFiles.length;
+    const dirs = allDirs.slice(0, BROWSE_ENTRY_LIMIT);
+    const remaining = BROWSE_ENTRY_LIMIT - dirs.length;
+    const files = allFiles.slice(0, Math.max(remaining, 0));
+    const hasMore = totalEntries > BROWSE_ENTRY_LIMIT;
+
+    const result = { dirs, files };
+    if (hasMore) result.hasMore = true;
+    res.json(result);
+  });
+
   // --- Directory Browser ---
 
   app.get('/api/browse', async (req, res) => {
@@ -85,6 +178,100 @@ export function createServer({ testMode = false } = {}) {
     const parent = resolved === '/' ? null : path.dirname(resolved);
 
     res.json({ path: resolved, parent, dirs });
+  });
+
+  // --- File Viewer ---
+
+  const MAX_FILE_SIZE = 1024 * 1024; // 1MB
+
+  app.get('/api/file', async (req, res) => {
+    const { sessionId, path: filePath } = req.query;
+
+    if (!sessionId || typeof sessionId !== 'string') {
+      return res.status(400).json({ error: 'sessionId is required' });
+    }
+    if (!filePath || typeof filePath !== 'string') {
+      return res.status(400).json({ error: 'path is required' });
+    }
+
+    // Reject absolute paths
+    if (path.isAbsolute(filePath)) {
+      return res.status(403).json({ error: 'Absolute paths not allowed' });
+    }
+
+    // Reject path traversal
+    const normalized = path.normalize(filePath);
+    if (normalized === '..' || normalized.startsWith(`..${path.sep}`)) {
+      return res.status(403).json({ error: 'Path traversal not allowed' });
+    }
+
+    const session = store.getSession(sessionId);
+    if (!session) {
+      return res.status(404).json({ error: 'Session not found' });
+    }
+
+    const project = store.getProject(session.projectId);
+    if (!project) {
+      return res.status(404).json({ error: 'Project not found' });
+    }
+
+    // Resolve worktree root
+    let worktreeRoot;
+    if (session.worktreePath) {
+      try {
+        worktreeRoot = await resolveWorktreePath(project.cwd, session.worktreePath);
+      } catch {
+        return res.status(400).json({ error: 'Invalid worktree path' });
+      }
+    } else {
+      worktreeRoot = project.cwd;
+    }
+
+    const resolved = path.resolve(worktreeRoot, normalized);
+
+    // Symlink-safe: realpath and verify still under worktree root
+    let realResolved;
+    try {
+      realResolved = await fs.promises.realpath(resolved);
+    } catch {
+      return res.status(404).json({ error: 'File not found' });
+    }
+
+    let realRoot;
+    try {
+      realRoot = await fs.promises.realpath(worktreeRoot);
+    } catch {
+      return res.status(400).json({ error: 'Worktree root not found' });
+    }
+
+    if (!realResolved.startsWith(realRoot + path.sep) && realResolved !== realRoot) {
+      return res.status(403).json({ error: 'Path escapes worktree' });
+    }
+
+    // Stat the file
+    let stat;
+    try {
+      stat = await fs.promises.stat(realResolved);
+    } catch {
+      return res.status(404).json({ error: 'File not found' });
+    }
+
+    if (!stat.isFile()) {
+      return res.status(400).json({ error: 'Not a file' });
+    }
+
+    if (stat.size > MAX_FILE_SIZE) {
+      return res.status(413).json({ error: 'File too large (max 1MB)' });
+    }
+
+    // Read file and check for binary (null bytes in first 8KB)
+    const content = await fs.promises.readFile(realResolved);
+    const checkBytes = content.subarray(0, 8192);
+    if (checkBytes.includes(0)) {
+      return res.json({ isBinary: true });
+    }
+
+    res.type('text/plain').send(content.toString('utf-8'));
   });
 
   // --- Helpers ---
