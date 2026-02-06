@@ -555,6 +555,14 @@
         );
         return;
       }
+      if (err.code === 'DIRTY_CHECK_FAILED') {
+        showConfirmDialog(
+          'Cannot Verify',
+          'Unable to verify worktree status. Delete anyway?',
+          () => deleteSession(id, true)
+        );
+        return;
+      }
       // Show other errors as toast
       showToast(err.error || 'Failed to delete session', 'error');
       return;
@@ -567,18 +575,37 @@
     }
   }
 
-  async function archiveSession(id, branchName) {
-    const res = await fetch(`/api/sessions/${id}/archive`, { method: 'POST' });
+  async function archiveSession(id, branchName, force = false) {
+    const url = force
+      ? `/api/sessions/${id}/archive?force=true`
+      : `/api/sessions/${id}/archive`;
+    const res = await fetch(url, { method: 'POST' });
 
     if (!res.ok) {
       const err = await res.json();
+      if (err.code === 'DIRTY_WORKTREE') {
+        showConfirmDialog(
+          'Uncommitted Changes',
+          'This session has uncommitted changes. Archive anyway?',
+          () => archiveSession(id, branchName, true)
+        );
+        return;
+      }
+      if (err.code === 'DIRTY_CHECK_FAILED') {
+        showConfirmDialog(
+          'Cannot Verify',
+          'Unable to verify worktree status. Archive anyway?',
+          () => archiveSession(id, branchName, true)
+        );
+        return;
+      }
       showToast(err.error || 'Failed to archive session', 'error');
       return;
     }
 
     const result = await res.json();
-    const msg = branchName
-      ? `Session archived. Branch "${branchName}" preserved.`
+    const msg = result.branch
+      ? `Session archived. Branch "${result.branch}" preserved.`
       : 'Session archived successfully.';
     showToast(msg, 'success');
   }

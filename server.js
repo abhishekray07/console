@@ -12,6 +12,7 @@ import { load, save } from './store.js';
 import {
   validateGitRepo,
   validateWorktreesDir,
+  resolveWorktreePath,
   sanitizeBranchName,
   createWorktree,
   removeWorktree,
@@ -116,14 +117,21 @@ export function createServer({ testMode = false } = {}) {
     }
   }
 
-  function spawnSession(session) {
+  async function spawnSession(session) {
     const project = data.projects.find((p) => p.id === session.projectId);
     if (!project) throw new Error('Project not found for session');
 
     // Use worktree path if available (new sessions), otherwise project cwd (backward compat)
-    const cwd = session.worktreePath
-      ? path.join(project.cwd, session.worktreePath)
-      : project.cwd;
+    let cwd = project.cwd;
+    if (session.worktreePath) {
+      try {
+        cwd = await resolveWorktreePath(project.cwd, session.worktreePath);
+      } catch (e) {
+        const err = new Error(`Invalid worktree path for session: ${e.message}`);
+        err.code = e.code || 'INVALID_WORKTREE_PATH';
+        throw err;
+      }
+    }
 
     const spawnOpts = {
       cwd,
@@ -228,9 +236,11 @@ export function createServer({ testMode = false } = {}) {
     res.status(201).json(project);
   });
 
-  app.delete('/api/projects/:id', (req, res) => {
+  app.delete('/api/projects/:id', async (req, res) => {
     const idx = data.projects.findIndex((p) => p.id === req.params.id);
     if (idx === -1) return res.status(404).json({ error: 'not found' });
+
+    const project = data.projects[idx];
 
     // Kill all sessions for this project
     const projectSessions = data.sessions.filter((s) => s.projectId === req.params.id);
@@ -240,6 +250,16 @@ export function createServer({ testMode = false } = {}) {
       const msg = JSON.stringify({ type: 'session-deleted', sessionId: s.id });
       for (const ws of clients) {
         safeSend(ws, msg);
+      }
+    }
+
+    // Clean up worktrees and branches for all sessions (best-effort)
+    for (const s of projectSessions) {
+      if (!s.branchName) continue;
+      try {
+        await removeWorktree(project.cwd, s.branchName, project.id, { deleteBranch: true });
+      } catch {
+        // Best-effort cleanup - ignore errors
       }
     }
 
@@ -311,7 +331,7 @@ export function createServer({ testMode = false } = {}) {
     persist();
 
     try {
-      spawnSession(session);
+      await spawnSession(session);
     } catch (e) {
       // Clean up worktree on spawn failure
       try {
@@ -323,6 +343,9 @@ export function createServer({ testMode = false } = {}) {
       const idx = data.sessions.findIndex((s) => s.id === session.id);
       if (idx !== -1) data.sessions.splice(idx, 1);
       persist();
+      if (e.code === 'INVALID_WORKTREE_PATH' || e.code === 'PATH_SAFETY_VIOLATION') {
+        return res.status(400).json({ error: e.message, code: e.code });
+      }
       return res.status(500).json({ error: `Failed to spawn: ${e.message}` });
     }
 
@@ -353,8 +376,15 @@ export function createServer({ testMode = false } = {}) {
           });
         }
       } catch (e) {
-        // If dirty check fails (e.g., worktree is missing/corrupted), proceed with deletion
-        if (!(e instanceof WorktreeDirtyCheckError)) {
+        if (e instanceof WorktreeDirtyCheckError) {
+          // Only proceed silently if worktree is missing - other errors should block
+          if (e.code !== 'WORKTREE_MISSING') {
+            return res.status(400).json({
+              error: 'Cannot verify worktree status. Use force=true to delete anyway.',
+              code: e.code || 'DIRTY_CHECK_FAILED',
+            });
+          }
+        } else {
           throw e;
         }
       }
@@ -389,6 +419,31 @@ export function createServer({ testMode = false } = {}) {
 
     const session = data.sessions[idx];
     const project = data.projects.find((p) => p.id === session.projectId);
+    const force = req.query.force === 'true';
+
+    // Check for dirty worktree (same as delete - archive also removes worktree)
+    if (!force && session.branchName && project) {
+      try {
+        const dirty = await isWorktreeDirty(project.cwd, session.branchName);
+        if (dirty) {
+          return res.status(400).json({
+            error: 'Worktree has uncommitted changes. Use force=true to archive anyway.',
+            code: 'DIRTY_WORKTREE',
+          });
+        }
+      } catch (e) {
+        if (e instanceof WorktreeDirtyCheckError) {
+          if (e.code !== 'WORKTREE_MISSING') {
+            return res.status(400).json({
+              error: 'Cannot verify worktree status. Use force=true to archive anyway.',
+              code: e.code || 'DIRTY_CHECK_FAILED',
+            });
+          }
+        } else {
+          throw e;
+        }
+      }
+    }
 
     manager.kill(session.id);
 
@@ -455,8 +510,11 @@ export function createServer({ testMode = false } = {}) {
     persist();
 
     try {
-      spawnSession(session);
+      await spawnSession(session);
     } catch (e) {
+      if (e.code === 'INVALID_WORKTREE_PATH' || e.code === 'PATH_SAFETY_VIOLATION') {
+        return res.status(400).json({ error: e.message, code: e.code });
+      }
       return res.status(500).json({ error: `Failed to spawn: ${e.message}` });
     }
 

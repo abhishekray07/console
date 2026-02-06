@@ -531,8 +531,8 @@ describe('Worktree Integration - Full Lifecycle', () => {
     });
     assert.strictEqual(restartRes.status, 200);
 
-    // Archive session
-    const archiveRes = await fetch(`${baseUrl}/api/sessions/${session.id}/archive`, {
+    // Archive session (force=true since we created a file making it dirty)
+    const archiveRes = await fetch(`${baseUrl}/api/sessions/${session.id}/archive?force=true`, {
       method: 'POST',
     });
     assert.strictEqual(archiveRes.status, 200);

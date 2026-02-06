@@ -120,6 +120,64 @@ export async function validateGitRepo(dir) {
  * @param {string} projectDir - Project root directory
  * @returns {Promise<{valid: boolean, message?: string}>}
  */
+/**
+ * Resolve and validate a worktree path within .worktrees
+ * @param {string} projectDir - Project root directory
+ * @param {string} worktreePath - Relative worktree path (e.g., ".worktrees/branch-name")
+ * @returns {Promise<string>} - Absolute resolved path
+ * @throws {Error} with code INVALID_WORKTREE_PATH if path is invalid
+ */
+export async function resolveWorktreePath(projectDir, worktreePath) {
+  if (!worktreePath || typeof worktreePath !== 'string') {
+    const err = new Error('Invalid worktree path');
+    err.code = 'INVALID_WORKTREE_PATH';
+    throw err;
+  }
+
+  // Reject absolute paths
+  if (path.isAbsolute(worktreePath)) {
+    const err = new Error('Worktree path must be relative');
+    err.code = 'INVALID_WORKTREE_PATH';
+    throw err;
+  }
+
+  // Reject path traversal
+  const normalized = path.normalize(worktreePath);
+  if (normalized === '..' || normalized.startsWith(`..${path.sep}`)) {
+    const err = new Error('Worktree path contains path traversal');
+    err.code = 'INVALID_WORKTREE_PATH';
+    throw err;
+  }
+
+  // Must be under .worktrees/
+  if (!normalized.startsWith(`.worktrees${path.sep}`) && normalized !== '.worktrees') {
+    const err = new Error('Worktree path must be under .worktrees/');
+    err.code = 'INVALID_WORKTREE_PATH';
+    throw err;
+  }
+
+  // Validate .worktrees directory safety
+  const dirValidation = await validateWorktreesDir(projectDir);
+  if (!dirValidation.valid) {
+    const err = new Error(dirValidation.message);
+    err.code = 'PATH_SAFETY_VIOLATION';
+    throw err;
+  }
+
+  // Resolve both paths consistently - use realpath for projectDir to handle symlinks (e.g., /var -> /private/var on macOS)
+  const resolvedProject = await fs.promises.realpath(projectDir).catch(() => path.resolve(projectDir));
+  const resolvedTarget = path.resolve(resolvedProject, normalized);
+
+  // Verify the resolved path is inside the project
+  if (!resolvedTarget.startsWith(resolvedProject + path.sep)) {
+    const err = new Error('Worktree path escapes project directory');
+    err.code = 'INVALID_WORKTREE_PATH';
+    throw err;
+  }
+
+  return resolvedTarget;
+}
+
 export async function validateWorktreesDir(projectDir) {
   const worktreesPath = path.join(projectDir, '.worktrees');
 
@@ -259,6 +317,14 @@ export async function removeWorktree(projectDir, branchName, projectId, { delete
     throw err;
   }
 
+  // Validate .worktrees directory (path safety - same as createWorktree)
+  const dirValidation = await validateWorktreesDir(projectDir);
+  if (!dirValidation.valid) {
+    const err = new Error(dirValidation.message);
+    err.code = 'PATH_SAFETY_VIOLATION';
+    throw err;
+  }
+
   // Acquire project lock
   const release = await acquireProjectLock(projectId);
 
@@ -333,9 +399,16 @@ export async function worktreeExists(projectDir, branchName) {
       { cwd: projectDir }
     );
 
-    // Parse output to find our worktree
-    const resolvedPath = await fs.promises.realpath(worktreePath).catch(() => worktreePath);
-    return stdout.includes(`worktree ${resolvedPath}`);
+    // Parse output to find our worktree - compare exact paths to avoid prefix false positives
+    const target = await fs.promises.realpath(worktreePath).catch(() => path.resolve(worktreePath));
+    const worktrees = stdout
+      .split('\n')
+      .filter((line) => line.startsWith('worktree '))
+      .map((line) => line.slice('worktree '.length));
+    const resolved = await Promise.all(
+      worktrees.map((p) => fs.promises.realpath(p).catch(() => path.resolve(p)))
+    );
+    return resolved.includes(target);
   } catch {
     return false;
   }
@@ -345,9 +418,10 @@ export async function worktreeExists(projectDir, branchName) {
  * Error thrown when dirty check cannot be performed
  */
 export class WorktreeDirtyCheckError extends Error {
-  constructor(message) {
+  constructor(message, code = 'DIRTY_CHECK_FAILED') {
     super(message);
     this.name = 'WorktreeDirtyCheckError';
+    this.code = code;
   }
 }
 
@@ -370,8 +444,21 @@ export async function isWorktreeDirty(projectDir, branchName) {
     return stdout.trim().length > 0;
   } catch (err) {
     // Don't silently return false - throw so caller knows check failed
+    // Determine if this is a missing worktree or other failure
+    const stderr = `${err.stderr || ''}`.toLowerCase();
+    const msg = `${err.message || ''}`.toLowerCase();
+    let code = 'DIRTY_CHECK_FAILED';
+    if (
+      err.code === 'ENOENT' ||
+      stderr.includes('no such file or directory') ||
+      msg.includes('no such file or directory') ||
+      stderr.includes('cannot change to')
+    ) {
+      code = 'WORKTREE_MISSING';
+    }
     throw new WorktreeDirtyCheckError(
-      `Cannot check dirty status: ${err.stderr || err.message}`
+      `Cannot check dirty status: ${err.stderr || err.message}`,
+      code
     );
   }
 }
