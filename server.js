@@ -33,7 +33,7 @@ export function createServer({ testMode = false } = {}) {
   const wss = new WebSocketServer({ server, path: '/ws' });
   const manager = new PtyManager();
 
-  // In test mode, use bash instead of claude; don't persist
+  // In test mode, use bash instead of claude; in-memory SQLite
   const store = testMode ? createStore(':memory:') : createStore();
   const clients = new Set();
 

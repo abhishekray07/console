@@ -100,10 +100,10 @@ export function createStore(dbPath) {
       return this.getProject(id);
     },
 
-    deleteProject(id) {
+    deleteProject: db.transaction(function (id) {
       stmts.deleteProjectSessions.run(id);
       stmts.deleteProject.run(id);
-    },
+    }),
 
     getSessions(projectId) {
       return stmts.getSessions.all(projectId).map(rowToSession);
