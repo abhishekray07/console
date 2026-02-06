@@ -14,6 +14,9 @@
   let toastTimeout = null;
   let shellTerm = null;
   let shellFitAddon = null;
+  let expandedDirs = new Set(); // tracks expanded directory paths in file tree
+  let openTabs = []; // { id, filename, fullPath, content, type }
+  let activeTabId = 'claude';
 
   // --- DOM refs ---
   const projectListEl = document.getElementById('project-list');
@@ -34,6 +37,15 @@
   const rightPanel = document.getElementById('right-panel');
   const shellTerminalEl = document.getElementById('shell-terminal');
   const rightPanelPath = document.getElementById('right-panel-path');
+  const fileTreeEl = document.getElementById('file-tree');
+  const tabBar = document.getElementById('tab-bar');
+  const tabList = document.getElementById('tab-list');
+  const fileViewer = document.getElementById('file-viewer');
+  const fileViewerPath = document.getElementById('file-viewer-path');
+  const fileViewerRefresh = document.getElementById('file-viewer-refresh');
+  const fileViewerContent = document.getElementById('file-viewer-content');
+  const btnToggleFileTree = document.getElementById('btn-toggle-file-tree');
+  const fileTreeSection = document.getElementById('file-tree-section');
 
   // --- Helpers ---
   function wsSend(data) {
@@ -869,6 +881,137 @@
     if (e.key === 'Escape' && !modalOverlay.classList.contains('hidden')) {
       closeModal();
     }
+  };
+
+  // --- File Tree ---
+
+  async function fetchDirEntries(relativePath) {
+    if (!activeSessionId) return { dirs: [], files: [], hasMore: false };
+    const params = new URLSearchParams({ sessionId: activeSessionId });
+    if (relativePath) params.set('path', relativePath);
+    const res = await fetch(`/api/browse?${params}`);
+    if (!res.ok) return { dirs: [], files: [], hasMore: false };
+    const data = await res.json();
+    return {
+      dirs: data.dirs || [],
+      files: data.files || [],
+      hasMore: data.hasMore || false,
+    };
+  }
+
+  async function renderFileTreeDir(container, relativePath, depth) {
+    container.innerHTML = '';
+
+    const loading = document.createElement('div');
+    loading.className = 'file-tree-loading';
+    loading.textContent = 'Loading\u2026';
+    container.appendChild(loading);
+
+    const { dirs, files, hasMore } = await fetchDirEntries(relativePath);
+    container.innerHTML = '';
+
+    const indent = depth * 16;
+
+    // Render directories first
+    for (const dir of dirs) {
+      const dirPath = relativePath ? relativePath + '/' + dir : dir;
+      const item = document.createElement('div');
+
+      const row = document.createElement('div');
+      row.className = 'file-tree-item file-tree-folder';
+      row.style.paddingLeft = indent + 'px';
+
+      const arrow = document.createElement('span');
+      arrow.className = 'file-tree-arrow';
+      arrow.textContent = expandedDirs.has(dirPath) ? '\u25BC' : '\u25B6';
+
+      const label = document.createElement('span');
+      label.className = 'file-tree-label';
+      label.textContent = dir;
+
+      row.appendChild(arrow);
+      row.appendChild(label);
+
+      const children = document.createElement('div');
+      children.className = 'file-tree-children';
+      if (expandedDirs.has(dirPath)) {
+        children.classList.add('expanded');
+        renderFileTreeDir(children, dirPath, depth + 1);
+      }
+
+      row.onclick = () => {
+        if (expandedDirs.has(dirPath)) {
+          expandedDirs.delete(dirPath);
+          arrow.textContent = '\u25B6';
+          children.classList.remove('expanded');
+          children.innerHTML = '';
+        } else {
+          expandedDirs.add(dirPath);
+          arrow.textContent = '\u25BC';
+          children.classList.add('expanded');
+          renderFileTreeDir(children, dirPath, depth + 1);
+        }
+      };
+
+      item.appendChild(row);
+      item.appendChild(children);
+      container.appendChild(item);
+    }
+
+    // Render files
+    for (const file of files) {
+      const filePath = relativePath ? relativePath + '/' + file : file;
+
+      const row = document.createElement('div');
+      row.className = 'file-tree-item';
+      row.style.paddingLeft = (indent + 16) + 'px';
+
+      const label = document.createElement('span');
+      label.className = 'file-tree-label';
+      label.textContent = file;
+      label.title = filePath;
+
+      row.appendChild(label);
+      row.onclick = () => openFileTab(filePath, file);
+      container.appendChild(row);
+    }
+
+    // "Show more" indicator when entries were truncated
+    if (hasMore) {
+      const more = document.createElement('div');
+      more.className = 'file-tree-more';
+      more.style.paddingLeft = indent + 'px';
+      more.textContent = 'More entries not shown\u2026';
+      container.appendChild(more);
+    }
+
+    // Show message if empty
+    if (dirs.length === 0 && files.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'file-tree-loading';
+      empty.textContent = 'Empty directory';
+      container.appendChild(empty);
+    }
+  }
+
+  function initFileTree() {
+    if (!activeSessionId) {
+      fileTreeEl.innerHTML = '';
+      return;
+    }
+    expandedDirs.clear();
+    renderFileTreeDir(fileTreeEl, '', 0);
+  }
+
+  // File tree collapse/expand toggle
+  btnToggleFileTree.onclick = () => {
+    const isCollapsed = fileTreeSection.classList.toggle('collapsed');
+    btnToggleFileTree.innerHTML = isCollapsed ? '&#x25B6;' : '&#x25BC;';
+    btnToggleFileTree.title = isCollapsed ? 'Expand file tree' : 'Collapse file tree';
+    // Refit shell terminal after layout change
+    requestAnimationFrame(() => {
+      if (shellFitAddon) shellFitAddon.fit();
+    });
   };
 
   // --- Init ---
