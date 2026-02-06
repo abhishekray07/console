@@ -225,6 +225,54 @@ body {
 }
 .home-add-btn:hover { border-color: #e94560; color: #e94560; }
 
+/* --- Right panel (shell terminal) --- */
+
+#right-panel {
+  width: 400px;
+  min-width: 400px;
+  background: #1a1a2e;
+  border-left: 1px solid #0f3460;
+  display: flex;
+  flex-direction: column;
+}
+#right-panel.hidden { display: none; }
+
+.right-panel-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid #0f3460;
+  background: #16213e;
+}
+
+.right-panel-title {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #6b7280;
+}
+
+#right-panel-path {
+  font-size: 11px;
+  color: #569cd6;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#shell-terminal-wrapper {
+  flex: 1;
+  position: relative;
+}
+
+#shell-terminal {
+  position: absolute;
+  inset: 0;
+  padding: 8px;
+}
+
 /* --- Modal --- */
 
 #modal-overlay {
