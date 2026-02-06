@@ -1014,6 +1014,194 @@
     });
   };
 
+  // --- Tab System ---
+
+  function renderTabs() {
+    if (!activeSessionId) {
+      tabBar.classList.remove('visible');
+      return;
+    }
+    tabBar.classList.add('visible');
+    tabList.innerHTML = '';
+
+    // Claude tab (always first, never closeable)
+    const claudeTab = document.createElement('div');
+    claudeTab.className = 'tab' + (activeTabId === 'claude' ? ' active' : '');
+    const claudeLabel = document.createElement('span');
+    claudeLabel.className = 'tab-label';
+    claudeLabel.textContent = 'Claude';
+    claudeTab.appendChild(claudeLabel);
+    claudeTab.onclick = () => switchTab('claude');
+    tabList.appendChild(claudeTab);
+
+    // File tabs
+    for (const tab of openTabs) {
+      const el = document.createElement('div');
+      el.className = 'tab' + (activeTabId === tab.id ? ' active' : '');
+      el.title = tab.fullPath;
+
+      const label = document.createElement('span');
+      label.className = 'tab-label';
+      label.textContent = tab.filename;
+
+      const close = document.createElement('button');
+      close.className = 'tab-close';
+      close.textContent = '\u00D7';
+      close.onclick = (e) => {
+        e.stopPropagation();
+        closeTab(tab.id);
+      };
+
+      el.appendChild(label);
+      el.appendChild(close);
+      el.onclick = () => switchTab(tab.id);
+      tabList.appendChild(el);
+    }
+  }
+
+  function switchTab(tabId) {
+    activeTabId = tabId;
+    renderTabs();
+
+    const termWrapper = document.getElementById('terminal-wrapper');
+
+    if (tabId === 'claude') {
+      // Show terminal, hide file viewer
+      termWrapper.style.display = '';
+      termWrapper.style.inset = '32px 0 0 0';
+      fileViewer.classList.add('hidden');
+      term.focus();
+      // Refit terminal since we changed inset
+      requestAnimationFrame(() => { if (fitAddon) fitAddon.fit(); });
+    } else {
+      // Show file viewer, hide terminal
+      termWrapper.style.display = 'none';
+      fileViewer.classList.remove('hidden');
+
+      const tab = openTabs.find(t => t.id === tabId);
+      if (tab) {
+        renderFileContent(tab);
+      }
+    }
+  }
+
+  function closeTab(tabId) {
+    openTabs = openTabs.filter(t => t.id !== tabId);
+    if (activeTabId === tabId) {
+      activeTabId = openTabs.length > 0 ? openTabs[openTabs.length - 1].id : 'claude';
+    }
+    switchTab(activeTabId);
+  }
+
+  async function openFileTab(filePath, filename) {
+    // Check if already open
+    const existing = openTabs.find(t => t.id === filePath);
+    if (existing) {
+      switchTab(existing.id);
+      return;
+    }
+
+    // Fetch file content
+    const res = await fetch(`/api/file?sessionId=${activeSessionId}&path=${encodeURIComponent(filePath)}`);
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: 'Failed to load file' }));
+      showToast(err.error || 'Failed to load file', 'error');
+      return;
+    }
+
+    const contentType = res.headers.get('content-type') || '';
+    let tab;
+
+    if (contentType.includes('application/json')) {
+      // Binary file response
+      const data = await res.json();
+      if (data.isBinary) {
+        tab = { id: filePath, filename, fullPath: filePath, content: null, type: 'binary' };
+      }
+    } else {
+      const content = await res.text();
+      const ext = filename.split('.').pop().toLowerCase();
+      const type = (ext === 'md' || ext === 'markdown') ? 'markdown' : 'text';
+      tab = { id: filePath, filename, fullPath: filePath, content, type };
+    }
+
+    if (tab) {
+      openTabs.push(tab);
+      switchTab(tab.id);
+    }
+  }
+
+  function renderFileContent(tab) {
+    fileViewerPath.textContent = tab.fullPath;
+    fileViewerContent.innerHTML = '';
+    fileViewerContent.className = '';
+
+    if (tab.type === 'binary') {
+      fileViewerContent.className = 'binary-file';
+      fileViewerContent.textContent = 'Binary file \u2014 not supported';
+      return;
+    }
+
+    if (tab.type === 'markdown') {
+      fileViewerContent.className = 'markdown-body';
+      const rawHtml = marked.parse(tab.content);
+      fileViewerContent.innerHTML = DOMPurify.sanitize(rawHtml);
+      return;
+    }
+
+    // Plain text
+    fileViewerContent.className = 'plain-text';
+    fileViewerContent.textContent = tab.content;
+  }
+
+  // Refresh button handler
+  fileViewerRefresh.onclick = async () => {
+    const tab = openTabs.find(t => t.id === activeTabId);
+    if (!tab || tab.type === 'binary') return;
+
+    const res = await fetch(`/api/file?sessionId=${activeSessionId}&path=${encodeURIComponent(tab.fullPath)}`);
+    if (!res.ok) {
+      showToast('Failed to refresh file', 'error');
+      return;
+    }
+
+    const contentType = res.headers.get('content-type') || '';
+    if (contentType.includes('application/json')) {
+      const data = await res.json();
+      if (data.isBinary) {
+        tab.type = 'binary';
+        tab.content = null;
+      }
+    } else {
+      tab.content = await res.text();
+    }
+
+    renderFileContent(tab);
+  };
+
+  // Keyboard shortcuts (only when terminal is NOT focused)
+  document.addEventListener('keydown', (e) => {
+    const inTerminal = terminalEl.contains(document.activeElement) ||
+                       shellTerminalEl.contains(document.activeElement);
+    if (inTerminal) return;
+
+    if (e.altKey && e.key === 'Tab') {
+      e.preventDefault();
+      const allIds = ['claude', ...openTabs.map(t => t.id)];
+      const idx = allIds.indexOf(activeTabId);
+      const nextIdx = (idx + 1) % allIds.length;
+      switchTab(allIds[nextIdx]);
+    }
+
+    if (e.altKey && e.key === 'w') {
+      e.preventDefault();
+      if (activeTabId !== 'claude') {
+        closeTab(activeTabId);
+      }
+    }
+  });
+
   // --- Init ---
   initTerminal();
   initShellTerminal();
