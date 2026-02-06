@@ -12,6 +12,8 @@
   let expandedProjects = new Set();
   let reconnectDelay = 1000;
   let toastTimeout = null;
+  let shellTerm = null;
+  let shellFitAddon = null;
 
   // --- DOM refs ---
   const projectListEl = document.getElementById('project-list');
@@ -29,6 +31,9 @@
   const btnSelectDir = document.getElementById('btn-select-dir');
   const btnModalCancel = document.getElementById('btn-modal-cancel');
   const btnModalCreate = document.getElementById('btn-modal-create');
+  const rightPanel = document.getElementById('right-panel');
+  const shellTerminalEl = document.getElementById('shell-terminal');
+  const rightPanelPath = document.getElementById('right-panel-path');
 
   // --- Helpers ---
   function wsSend(data) {
@@ -220,6 +225,81 @@
     resizeObserver.observe(terminalEl);
   }
 
+  function initShellTerminal() {
+    shellTerm = new Terminal({
+      cursorBlink: true,
+      fontSize: 13,
+      fontFamily: "Menlo, Monaco, 'Courier New', monospace",
+      fontWeight: '400',
+      fontWeightBold: '600',
+      lineHeight: 1.2,
+      letterSpacing: 0,
+      allowTransparency: false,
+      theme: {
+        background: '#1a1a2e',
+        foreground: '#d4d4d4',
+        cursor: '#e94560',
+        cursorAccent: '#1a1a2e',
+        selectionBackground: '#3a3a5e',
+        black: '#1a1a2e',
+        red: '#f44747',
+        green: '#4ec9b0',
+        yellow: '#dcdcaa',
+        blue: '#569cd6',
+        magenta: '#c586c0',
+        cyan: '#9cdcfe',
+        white: '#d4d4d4',
+        brightBlack: '#6b7280',
+        brightRed: '#f44747',
+        brightGreen: '#4ec9b0',
+        brightYellow: '#dcdcaa',
+        brightBlue: '#569cd6',
+        brightMagenta: '#c586c0',
+        brightCyan: '#9cdcfe',
+        brightWhite: '#ffffff',
+      },
+    });
+
+    shellFitAddon = new FitAddon.FitAddon();
+    const webLinksAddon = new WebLinksAddon.WebLinksAddon();
+
+    shellTerm.loadAddon(shellFitAddon);
+    shellTerm.loadAddon(webLinksAddon);
+    shellTerm.open(shellTerminalEl);
+
+    try {
+      const webglAddon = new WebglAddon.WebglAddon();
+      shellTerm.loadAddon(webglAddon);
+    } catch (e) {
+      console.warn('Shell WebGL addon failed, using canvas renderer');
+    }
+
+    shellFitAddon.fit();
+
+    shellTerm.onData((data) => {
+      if (activeSessionId) {
+        wsSend(JSON.stringify({ type: 'shell-input', sessionId: activeSessionId, data }));
+      }
+    });
+
+    const handleShellResize = debounce(() => {
+      if (shellFitAddon) {
+        shellFitAddon.fit();
+        if (activeSessionId) {
+          wsSend(JSON.stringify({
+            type: 'shell-resize',
+            sessionId: activeSessionId,
+            cols: shellTerm.cols,
+            rows: shellTerm.rows,
+          }));
+        }
+      }
+    }, 100);
+
+    const shellResizeObserver = new ResizeObserver(handleShellResize);
+    shellResizeObserver.observe(shellTerminalEl);
+  }
+
   // --- WebSocket ---
   function connect() {
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -262,6 +342,7 @@
             activeSessionId = null;
             term.reset();
             noSession.classList.remove('hidden');
+            rightPanel.classList.add('hidden');
           }
           renderSidebar();
           break;
@@ -271,12 +352,29 @@
             activeSessionId = null;
             term.reset();
             noSession.classList.remove('hidden');
+            rightPanel.classList.add('hidden');
           }
           break;
 
         case 'exited':
           // Session still exists, just re-render sidebar to update status dot
           renderSidebar();
+          break;
+
+        case 'shell-output':
+          if (msg.sessionId === activeSessionId && msg.data) {
+            shellTerm.write(msg.data);
+          }
+          break;
+
+        case 'shell-replay-done':
+          if (msg.sessionId === activeSessionId) {
+            shellTerm.write('', () => {
+              requestAnimationFrame(() => {
+                shellTerm.scrollToBottom();
+              });
+            });
+          }
           break;
       }
     };
@@ -293,13 +391,32 @@
   function attachSession(sessionId) {
     activeSessionId = sessionId;
     term.reset();
+    shellTerm.reset();
     noSession.classList.add('hidden');
+
+    // Show right panel and update path display
+    const session = sessions.find((s) => s.id === sessionId);
+    if (session) {
+      rightPanel.classList.remove('hidden');
+      rightPanelPath.textContent = session.worktreePath || '';
+      rightPanelPath.title = session.worktreePath || '';
+    } else {
+      rightPanel.classList.add('hidden');
+    }
 
     wsSend(JSON.stringify({
       type: 'attach',
       sessionId,
       cols: term.cols,
       rows: term.rows,
+    }));
+
+    // Attach shell terminal
+    wsSend(JSON.stringify({
+      type: 'shell-attach',
+      sessionId,
+      cols: shellTerm.cols,
+      rows: shellTerm.rows,
     }));
 
     term.focus();
@@ -572,6 +689,7 @@
       activeSessionId = null;
       term.reset();
       noSession.classList.remove('hidden');
+      rightPanel.classList.add('hidden');
     }
   }
 
@@ -755,5 +873,6 @@
 
   // --- Init ---
   initTerminal();
+  initShellTerminal();
   connect();
 })();

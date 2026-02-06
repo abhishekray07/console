@@ -597,3 +597,132 @@ describe('Worktree Integration - Full Lifecycle', () => {
     assert.ok(!sessions.find((s) => s.id === session.id), 'session should be removed from list');
   });
 });
+
+describe('Shell WebSocket', () => {
+  let server;
+  let baseUrl;
+  let wsUrl;
+  let tempDir;
+  let projectId;
+  let sessionId;
+
+  before(async () => {
+    server = createServer({ testMode: true });
+    await new Promise((resolve) => server.listen(0, resolve));
+    const port = server.address().port;
+    baseUrl = `http://localhost:${port}`;
+    wsUrl = `ws://localhost:${port}/ws`;
+
+    // Create temp repo, project, and session
+    tempDir = createTempRepo();
+    const projRes = await fetch(`${baseUrl}/api/projects`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'shell-ws-test', cwd: tempDir }),
+    });
+    const proj = await projRes.json();
+    projectId = proj.id;
+
+    const sessRes = await fetch(`${baseUrl}/api/projects/${projectId}/sessions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'Shell Session' }),
+    });
+    const session = await sessRes.json();
+    sessionId = session.id;
+  });
+
+  after(async () => {
+    await server.destroy();
+    if (tempDir) cleanupDir(tempDir);
+  });
+
+  it('shell-attach spawns shell and replays buffer', async () => {
+    const { WebSocket } = await import('ws');
+    const ws = new WebSocket(wsUrl);
+
+    await new Promise((resolve) => ws.on('open', resolve));
+
+    // Skip the initial state message
+    await new Promise((resolve) => ws.once('message', resolve));
+
+    // Send shell-attach
+    ws.send(JSON.stringify({
+      type: 'shell-attach',
+      sessionId,
+      cols: 80,
+      rows: 24,
+    }));
+
+    // Should receive shell-replay-done
+    const messages = [];
+    await new Promise((resolve) => {
+      ws.on('message', (raw) => {
+        const msg = JSON.parse(raw.toString());
+        messages.push(msg);
+        if (msg.type === 'shell-replay-done') resolve();
+      });
+      // Timeout safety
+      setTimeout(resolve, 3000);
+    });
+
+    const replayDone = messages.find((m) => m.type === 'shell-replay-done');
+    assert.ok(replayDone, 'should receive shell-replay-done');
+    assert.strictEqual(replayDone.sessionId, sessionId);
+
+    ws.close();
+  });
+
+  it('shell-input sends data and shell-output is received', async () => {
+    const { WebSocket } = await import('ws');
+    const ws = new WebSocket(wsUrl);
+
+    await new Promise((resolve) => ws.on('open', resolve));
+    await new Promise((resolve) => ws.once('message', resolve)); // skip state
+
+    // Attach shell
+    ws.send(JSON.stringify({
+      type: 'shell-attach',
+      sessionId,
+      cols: 80,
+      rows: 24,
+    }));
+
+    // Wait for replay-done
+    await new Promise((resolve) => {
+      ws.on('message', (raw) => {
+        const msg = JSON.parse(raw.toString());
+        if (msg.type === 'shell-replay-done') resolve();
+      });
+      setTimeout(resolve, 3000);
+    });
+
+    // Send input
+    ws.send(JSON.stringify({
+      type: 'shell-input',
+      sessionId,
+      data: 'echo shell-test-output\r',
+    }));
+
+    // Wait for shell output containing our echo
+    const output = [];
+    await new Promise((resolve) => {
+      const handler = (raw) => {
+        const msg = JSON.parse(raw.toString());
+        if (msg.type === 'shell-output' && msg.data) {
+          output.push(msg.data);
+          if (output.join('').includes('shell-test-output')) {
+            ws.off('message', handler);
+            resolve();
+          }
+        }
+      };
+      ws.on('message', handler);
+      setTimeout(resolve, 3000);
+    });
+
+    const combined = output.join('');
+    assert.ok(combined.includes('shell-test-output'), `expected shell output, got: ${combined}`);
+    ws.close();
+  });
+});

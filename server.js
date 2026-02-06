@@ -246,6 +246,7 @@ export function createServer({ testMode = false } = {}) {
     const projectSessions = data.sessions.filter((s) => s.projectId === req.params.id);
     for (const s of projectSessions) {
       manager.kill(s.id);
+      manager.killShell(s.id);
       // Notify attached clients
       const msg = JSON.stringify({ type: 'session-deleted', sessionId: s.id });
       for (const ws of clients) {
@@ -391,6 +392,7 @@ export function createServer({ testMode = false } = {}) {
     }
 
     manager.kill(session.id);
+    manager.killShell(session.id);
 
     // Remove worktree and branch
     if (session.branchName && project) {
@@ -446,6 +448,7 @@ export function createServer({ testMode = false } = {}) {
     }
 
     manager.kill(session.id);
+    manager.killShell(session.id);
 
     const fullBranchName = session.branchName ? `claude/${session.branchName}` : null;
 
@@ -543,8 +546,9 @@ export function createServer({ testMode = false } = {}) {
 
     // Track the current data listener so we can remove it on detach
     let dataListener = null;
+    let shellDataListener = null;
 
-    ws.on('message', (raw) => {
+    ws.on('message', async (raw) => {
       let msg;
       try {
         msg = JSON.parse(raw);
@@ -627,6 +631,79 @@ export function createServer({ testMode = false } = {}) {
           }
           break;
         }
+
+        case 'shell-attach': {
+          const { sessionId, cols, rows } = msg;
+          const session = data.sessions.find((s) => s.id === sessionId);
+          if (!session) break;
+
+          const project = data.projects.find((p) => p.id === session.projectId);
+          if (!project) break;
+
+          // Detach previous shell listener
+          if (attachedSessionId && shellDataListener) {
+            manager.offShellData(attachedSessionId, shellDataListener);
+            shellDataListener = null;
+          }
+
+          // Spawn shell if not already running
+          if (!manager.isShellAlive(sessionId)) {
+            let cwd = project.cwd;
+            if (session.worktreePath) {
+              try {
+                cwd = await resolveWorktreePath(project.cwd, session.worktreePath);
+              } catch {
+                break;
+              }
+            }
+            manager.spawnShell(sessionId, { cwd, cols, rows });
+          } else if (cols && rows) {
+            manager.resizeShell(sessionId, cols, rows);
+          }
+
+          // Install live listener with replay buffering (same pattern as attach)
+          const shellPending = [];
+          let shellReplaying = true;
+
+          shellDataListener = (d) => {
+            if (shellReplaying) {
+              shellPending.push(d);
+            } else {
+              safeSend(ws, JSON.stringify({ type: 'shell-output', sessionId, data: d }));
+            }
+          };
+          manager.onShellData(sessionId, shellDataListener);
+
+          // Replay buffer
+          const shellBuffer = manager.getShellBuffer(sessionId);
+          if (shellBuffer.length > 0) {
+            const combined = shellBuffer.join('');
+            safeSend(ws, JSON.stringify({ type: 'shell-output', sessionId, data: combined }));
+          }
+
+          // Flush pending and switch to live
+          shellReplaying = false;
+          for (const d of shellPending) {
+            safeSend(ws, JSON.stringify({ type: 'shell-output', sessionId, data: d }));
+          }
+
+          safeSend(ws, JSON.stringify({ type: 'shell-replay-done', sessionId }));
+          break;
+        }
+
+        case 'shell-input': {
+          if (msg.sessionId) {
+            manager.writeShell(msg.sessionId, msg.data);
+          }
+          break;
+        }
+
+        case 'shell-resize': {
+          if (msg.sessionId && msg.cols && msg.rows) {
+            manager.resizeShell(msg.sessionId, msg.cols, msg.rows);
+          }
+          break;
+        }
       }
     });
 
@@ -634,6 +711,9 @@ export function createServer({ testMode = false } = {}) {
       clients.delete(ws);
       if (attachedSessionId && dataListener) {
         manager.offData(attachedSessionId, dataListener);
+      }
+      if (attachedSessionId && shellDataListener) {
+        manager.offShellData(attachedSessionId, shellDataListener);
       }
     });
   });
@@ -672,6 +752,7 @@ export function createServer({ testMode = false } = {}) {
   server.destroy = () => {
     return new Promise((resolve) => {
       manager.destroyAll();
+      manager.destroyAllShells();
       wss.close();
       for (const client of clients) {
         client.terminate();

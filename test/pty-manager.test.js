@@ -114,3 +114,88 @@ describe('PtyManager', () => {
     assert.ok(exitCalled, 'exit callback should have been called');
   });
 });
+
+describe('PtyManager shell processes', () => {
+  let manager;
+
+  before(() => {
+    manager = new PtyManager();
+  });
+
+  after(() => {
+    for (const id of manager.getAll()) {
+      manager.kill(id);
+    }
+    manager.destroyAllShells();
+  });
+
+  it('should spawn a shell process and receive output', async () => {
+    const sessionId = 'shell-test-1';
+    manager.spawnShell(sessionId, {
+      cwd: process.cwd(),
+      cols: 80,
+      rows: 24,
+    });
+
+    const proc = manager.getShellProcess(sessionId);
+    assert.ok(proc, 'shell process should exist');
+    assert.ok(manager.isShellAlive(sessionId), 'shell should be alive');
+
+    // Send a command and wait for output
+    manager.writeShell(sessionId, 'echo hello-from-shell\r');
+    await new Promise((resolve) => setTimeout(resolve, 500));
+
+    const buffer = manager.getShellBuffer(sessionId);
+    const combined = buffer.join('');
+    assert.ok(combined.includes('hello-from-shell'), `expected shell output, got: ${combined}`);
+  });
+
+  it('should resize a shell process', () => {
+    const sessionId = 'shell-resize-test';
+    manager.spawnShell(sessionId, {
+      cwd: process.cwd(),
+      cols: 80,
+      rows: 24,
+    });
+    // Should not throw
+    manager.resizeShell(sessionId, 120, 40);
+    manager.killShell(sessionId);
+  });
+
+  it('should kill a shell process', () => {
+    const sessionId = 'shell-kill-test';
+    manager.spawnShell(sessionId, {
+      cwd: process.cwd(),
+      cols: 80,
+      rows: 24,
+    });
+    assert.ok(manager.isShellAlive(sessionId));
+    manager.killShell(sessionId);
+    assert.ok(!manager.isShellAlive(sessionId));
+  });
+
+  it('should not spawn duplicate shell for same session', () => {
+    const sessionId = 'shell-dup-test';
+    manager.spawnShell(sessionId, {
+      cwd: process.cwd(),
+      cols: 80,
+      rows: 24,
+    });
+    assert.throws(() => {
+      manager.spawnShell(sessionId, {
+        cwd: process.cwd(),
+        cols: 80,
+        rows: 24,
+      });
+    }, /already exists/);
+    manager.killShell(sessionId);
+  });
+
+  it('destroyAllShells kills all shell processes', () => {
+    manager.spawnShell('shell-destroy-1', { cwd: process.cwd(), cols: 80, rows: 24 });
+    manager.spawnShell('shell-destroy-2', { cwd: process.cwd(), cols: 80, rows: 24 });
+    manager.destroyAllShells();
+    assert.ok(!manager.isShellAlive('shell-destroy-1'));
+    assert.ok(!manager.isShellAlive('shell-destroy-2'));
+  });
+});

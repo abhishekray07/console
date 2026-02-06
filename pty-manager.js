@@ -65,6 +65,7 @@ class PtyProcess extends EventEmitter {
 export class PtyManager {
   constructor() {
     this.processes = new Map();
+    this.shellProcesses = new Map();
   }
 
   spawn(sessionId, { cwd, resumeId, cols = 80, rows = 24, shell, args }) {
@@ -158,6 +159,73 @@ export class PtyManager {
   destroyAll() {
     for (const id of this.getAll()) {
       this.kill(id);
+    }
+  }
+
+  spawnShell(sessionId, { cwd, cols = 80, rows = 24 }) {
+    if (this.shellProcesses.has(sessionId)) {
+      throw new Error(`Shell for session ${sessionId} already exists`);
+    }
+
+    const shell = process.env.SHELL || '/bin/bash';
+    const ptyProcess = pty.spawn(shell, [], {
+      name: 'xterm-256color',
+      cols,
+      rows,
+      cwd,
+      env: { ...process.env, TERM: 'xterm-256color' },
+    });
+
+    const proc = new PtyProcess(ptyProcess);
+    this.shellProcesses.set(sessionId, proc);
+    return proc;
+  }
+
+  getShellProcess(sessionId) {
+    return this.shellProcesses.get(sessionId) || null;
+  }
+
+  getShellBuffer(sessionId) {
+    const proc = this.shellProcesses.get(sessionId);
+    return proc ? proc.buffer : [];
+  }
+
+  writeShell(sessionId, data) {
+    const proc = this.shellProcesses.get(sessionId);
+    if (proc) proc.write(data);
+  }
+
+  resizeShell(sessionId, cols, rows) {
+    const proc = this.shellProcesses.get(sessionId);
+    if (proc) proc.resize(cols, rows);
+  }
+
+  killShell(sessionId) {
+    const proc = this.shellProcesses.get(sessionId);
+    if (proc) {
+      proc.kill();
+      this.shellProcesses.delete(sessionId);
+    }
+  }
+
+  isShellAlive(sessionId) {
+    const proc = this.shellProcesses.get(sessionId);
+    return proc ? proc.alive : false;
+  }
+
+  onShellData(sessionId, callback) {
+    const proc = this.shellProcesses.get(sessionId);
+    if (proc) proc.on('data', callback);
+  }
+
+  offShellData(sessionId, callback) {
+    const proc = this.shellProcesses.get(sessionId);
+    if (proc) proc.off('data', callback);
+  }
+
+  destroyAllShells() {
+    for (const [id] of this.shellProcesses) {
+      this.killShell(id);
     }
   }
 }
