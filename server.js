@@ -928,11 +928,48 @@ export function createServer({ testMode = false } = {}) {
     });
   });
 
-  // --- Startup: resume running sessions ---
+  // --- Startup: recover missing Claude session IDs, then resume ---
 
   if (!testMode) {
     const sessions = store.getAll().sessions;
+
+    // First pass: recover missing claudeSessionId by scanning ~/.claude/projects/
     for (const session of sessions) {
+      if (session.status !== 'running' || session.claudeSessionId) continue;
+
+      const project = store.getProject(session.projectId);
+      if (!project) continue;
+
+      try {
+        let cwd = project.cwd;
+        if (session.worktreePath) {
+          cwd = fs.realpathSync(path.resolve(project.cwd, session.worktreePath));
+        }
+        const claudeProjectDir = path.join(
+          os.homedir(), '.claude', 'projects',
+          fs.realpathSync(cwd).replace(/\//g, '-').replace(/\./g, '-'),
+        );
+        const jsonlFiles = fs.readdirSync(claudeProjectDir)
+          .filter(f => f.endsWith('.jsonl'))
+          .map(f => ({
+            name: f,
+            mtime: fs.statSync(path.join(claudeProjectDir, f)).mtimeMs,
+          }))
+          .sort((a, b) => b.mtime - a.mtime); // most recently modified first
+
+        if (jsonlFiles.length > 0) {
+          const claudeSessionId = jsonlFiles[0].name.replace('.jsonl', '');
+          store.updateSession(session.id, { claudeSessionId });
+          console.log(`[startup] Recovered claude session ID for ${session.name}: ${claudeSessionId}`);
+        }
+      } catch {
+        // Directory may not exist or worktree path invalid — skip
+      }
+    }
+
+    // Second pass: resume sessions that have a claudeSessionId
+    const updatedSessions = store.getAll().sessions;
+    for (const session of updatedSessions) {
       if (session.status === 'running' && session.claudeSessionId) {
         const project = store.getProject(session.projectId);
         if (!project) {
