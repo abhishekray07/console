@@ -302,6 +302,14 @@ export function createServer({ testMode = false } = {}) {
     }
   }
 
+  /** Derive the ~/.claude/projects/ directory for a given cwd. */
+  function getClaudeProjectDir(cwd) {
+    return path.join(
+      os.homedir(), '.claude', 'projects',
+      fs.realpathSync(cwd).replace(/\//g, '-').replace(/\./g, '-'),
+    );
+  }
+
   async function spawnSession(session) {
     const project = store.getProject(session.projectId);
     if (!project) throw new Error('Project not found for session');
@@ -323,10 +331,7 @@ export function createServer({ testMode = false } = {}) {
     // Snapshot BEFORE spawn to avoid race where Claude creates the file instantly.
     let existingJsonlFiles;
     if (!testMode && !session.claudeSessionId) {
-      const claudeProjectDir = path.join(
-        os.homedir(), '.claude', 'projects',
-        fs.realpathSync(cwd).replace(/\//g, '-').replace(/\./g, '-'),
-      );
+      const claudeProjectDir = getClaudeProjectDir(cwd);
 
       existingJsonlFiles = new Set();
       try {
@@ -365,10 +370,7 @@ export function createServer({ testMode = false } = {}) {
     });
 
     if (existingJsonlFiles) {
-      const claudeProjectDir = path.join(
-        os.homedir(), '.claude', 'projects',
-        fs.realpathSync(cwd).replace(/\//g, '-').replace(/\./g, '-'),
-      );
+      const claudeProjectDir = getClaudeProjectDir(cwd);
       const MAX_POLL_MS = 60_000; // give up after 60s
       const startTime = Date.now();
 
@@ -943,12 +945,25 @@ export function createServer({ testMode = false } = {}) {
       try {
         let cwd = project.cwd;
         if (session.worktreePath) {
-          cwd = fs.realpathSync(path.resolve(project.cwd, session.worktreePath));
+          // Apply the same safety checks as resolveWorktreePath (sync version)
+          const normalized = path.normalize(session.worktreePath);
+          if (path.isAbsolute(session.worktreePath)
+            || normalized === '..' || normalized.startsWith(`..${path.sep}`)
+            || (!normalized.startsWith(`.worktrees${path.sep}`) && normalized !== '.worktrees')) {
+            console.warn(`[startup] Invalid worktree path for ${session.name}, marking exited`);
+            store.updateSession(session.id, { status: 'exited' });
+            continue;
+          }
+          const resolved = fs.realpathSync(path.resolve(project.cwd, normalized));
+          const resolvedProject = fs.realpathSync(project.cwd);
+          if (!resolved.startsWith(resolvedProject + path.sep)) {
+            console.warn(`[startup] Worktree path escapes project for ${session.name}, marking exited`);
+            store.updateSession(session.id, { status: 'exited' });
+            continue;
+          }
+          cwd = resolved;
         }
-        const claudeProjectDir = path.join(
-          os.homedir(), '.claude', 'projects',
-          fs.realpathSync(cwd).replace(/\//g, '-').replace(/\./g, '-'),
-        );
+        const claudeProjectDir = getClaudeProjectDir(cwd);
         const jsonlFiles = fs.readdirSync(claudeProjectDir)
           .filter(f => f.endsWith('.jsonl'))
           .map(f => ({
@@ -961,9 +976,13 @@ export function createServer({ testMode = false } = {}) {
           const claudeSessionId = jsonlFiles[0].name.replace('.jsonl', '');
           store.updateSession(session.id, { claudeSessionId });
           console.log(`[startup] Recovered claude session ID for ${session.name}: ${claudeSessionId}`);
+        } else {
+          console.warn(`[startup] No JSONL files found for ${session.name}, marking exited`);
+          store.updateSession(session.id, { status: 'exited' });
         }
-      } catch {
-        // Directory may not exist or worktree path invalid — skip
+      } catch (err) {
+        console.warn(`[startup] Could not recover session ID for ${session.name}: ${err.message}`);
+        store.updateSession(session.id, { status: 'exited' });
       }
     }
 
