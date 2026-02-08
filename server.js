@@ -316,6 +316,27 @@ export function createServer({ testMode = false } = {}) {
       }
     }
 
+    // Capture the Claude session ID by watching ~/.claude/projects/ for new .jsonl files.
+    // Claude CLI stores conversations as {sessionId}.jsonl in a directory derived from
+    // the realpath of the cwd: replace '/' and '.' with '-'.
+    // Snapshot BEFORE spawn to avoid race where Claude creates the file instantly.
+    let existingJsonlFiles;
+    if (!testMode && !session.claudeSessionId) {
+      const claudeProjectDir = path.join(
+        os.homedir(), '.claude', 'projects',
+        fs.realpathSync(cwd).replace(/\//g, '-').replace(/\./g, '-'),
+      );
+
+      existingJsonlFiles = new Set();
+      try {
+        existingJsonlFiles = new Set(
+          fs.readdirSync(claudeProjectDir).filter(f => f.endsWith('.jsonl')),
+        );
+      } catch {
+        // Directory may not exist yet — Claude will create it
+      }
+    }
+
     const spawnOpts = {
       cwd,
       ...(testMode
@@ -342,21 +363,35 @@ export function createServer({ testMode = false } = {}) {
       }
     });
 
-    if (!testMode) {
-      const uuidRegex = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
-      const captureListener = (d) => {
-        const match = d.match(uuidRegex);
-        if (match) {
-          store.updateSession(session.id, { claudeSessionId: match[0] });
-          manager.offData(session.id, captureListener);
-          broadcastState();
-        }
-      };
-      manager.onData(session.id, captureListener);
+    if (existingJsonlFiles) {
+      const claudeProjectDir = path.join(
+        os.homedir(), '.claude', 'projects',
+        fs.realpathSync(cwd).replace(/\//g, '-').replace(/\./g, '-'),
+      );
+      const MAX_POLL_MS = 60_000; // give up after 60s
+      const startTime = Date.now();
 
-      manager.onExit(session.id, () => {
-        manager.offData(session.id, captureListener);
-      });
+      const pollInterval = setInterval(() => {
+        if (Date.now() - startTime > MAX_POLL_MS) {
+          clearInterval(pollInterval);
+          return;
+        }
+        try {
+          const current = fs.readdirSync(claudeProjectDir).filter(f => f.endsWith('.jsonl'));
+          const newFile = current.find(f => !existingJsonlFiles.has(f));
+          if (newFile) {
+            const claudeSessionId = newFile.replace('.jsonl', '');
+            store.updateSession(session.id, { claudeSessionId });
+            broadcastState();
+            clearInterval(pollInterval);
+          }
+        } catch {
+          // Directory not yet created — keep polling
+        }
+      }, 500);
+
+      // Stop polling when the process exits
+      manager.onExit(session.id, () => clearInterval(pollInterval));
     }
   }
 

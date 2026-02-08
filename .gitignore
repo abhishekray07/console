@@ -2,3 +2,6 @@ node_modules/
 sessions.json
 projects.json
 .worktrees/
+.dex/
+.playwright-mcp/
+claude-console.db
