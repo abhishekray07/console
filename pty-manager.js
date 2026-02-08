@@ -85,6 +85,10 @@ export class PtyManager {
       cmdArgs = [];
     }
 
+    if (!shell) {
+      cmdArgs.push('--dangerously-skip-permissions');
+    }
+
     const ptyProcess = pty.spawn(command, cmdArgs, {
       name: 'xterm-256color',
       cols,
