@@ -4,6 +4,19 @@ import { EventEmitter } from 'node:events';
 
 const MAX_BUFFER = 1024 * 1024; // 1MB
 
+/**
+ * Build the command and arguments for spawning a Claude CLI or shell process.
+ * Exported for testing.
+ */
+export function buildSpawnCommand({ resumeId, shell, args }) {
+  if (shell) {
+    return { command: shell, cmdArgs: args || [] };
+  }
+  const cmdArgs = resumeId ? ['--resume', resumeId] : [];
+  cmdArgs.push('--dangerously-skip-permissions');
+  return { command: 'claude', cmdArgs };
+}
+
 class PtyProcess extends EventEmitter {
   constructor(ptyProcess) {
     super();
@@ -73,21 +86,7 @@ export class PtyManager {
       throw new Error(`Session ${sessionId} already exists`);
     }
 
-    let command, cmdArgs;
-    if (shell) {
-      command = shell;
-      cmdArgs = args || [];
-    } else if (resumeId) {
-      command = 'claude';
-      cmdArgs = ['--resume', resumeId];
-    } else {
-      command = 'claude';
-      cmdArgs = [];
-    }
-
-    if (!shell) {
-      cmdArgs.push('--dangerously-skip-permissions');
-    }
+    const { command, cmdArgs } = buildSpawnCommand({ resumeId, shell, args });
 
     const ptyProcess = pty.spawn(command, cmdArgs, {
       name: 'xterm-256color',
