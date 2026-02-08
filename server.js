@@ -27,6 +27,58 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MAX_NAME_LENGTH = 100;
 const MAX_CWD_LENGTH = 1024;
 
+/**
+ * Validate that Claude Code PreToolUse hooks are configured.
+ * Since we spawn with --dangerously-skip-permissions, hooks are the safety net.
+ * Logs warnings if hooks are missing (fail-open for startup, but noisy).
+ */
+function validateHooksConfig() {
+  const settingsPath = path.join(os.homedir(), '.claude', 'settings.json');
+
+  try {
+    fs.accessSync(settingsPath, fs.constants.R_OK);
+  } catch {
+    console.warn('WARNING: ~/.claude/settings.json not found. PreToolUse hooks are not configured.');
+    console.warn('  Sessions run with --dangerously-skip-permissions and NO safety guardrails.');
+    return;
+  }
+
+  let settings;
+  try {
+    settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
+  } catch (e) {
+    console.warn(`WARNING: Failed to parse ~/.claude/settings.json: ${e.message}`);
+    return;
+  }
+
+  const preToolUse = settings?.hooks?.PreToolUse;
+  if (!Array.isArray(preToolUse) || preToolUse.length === 0) {
+    console.warn('WARNING: No PreToolUse hooks configured in ~/.claude/settings.json.');
+    console.warn('  Sessions run with --dangerously-skip-permissions and NO safety guardrails.');
+    return;
+  }
+
+  const bashHook = preToolUse.find((h) => h.matcher === 'Bash');
+  if (!bashHook) {
+    console.warn('WARNING: No PreToolUse hook with matcher "Bash" found.');
+    console.warn('  Bash commands will not be validated before execution.');
+    return;
+  }
+
+  // Check that the hook script(s) exist and are executable
+  for (const hook of bashHook.hooks || []) {
+    if (hook.type === 'command' && hook.command) {
+      const scriptPath = hook.command.replace(/^~/, os.homedir()).replace(/"/g, '');
+      try {
+        fs.accessSync(scriptPath, fs.constants.X_OK);
+      } catch {
+        console.warn(`WARNING: Hook script not found or not executable: ${scriptPath}`);
+        console.warn('  Run: chmod +x ' + scriptPath);
+      }
+    }
+  }
+}
+
 export function createServer({ testMode = false } = {}) {
   const app = express();
   const server = http.createServer(app);
@@ -36,6 +88,11 @@ export function createServer({ testMode = false } = {}) {
   // In test mode, use bash instead of claude; in-memory SQLite
   const store = testMode ? createStore(':memory:') : createStore();
   const clients = new Set();
+
+  // Validate safety guardrails are in place (non-test only)
+  if (!testMode) {
+    validateHooksConfig();
+  }
 
   app.use(express.json({ limit: '16kb' }));
   app.use(express.static(path.join(__dirname, 'public')));
