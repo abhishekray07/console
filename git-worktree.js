@@ -569,7 +569,10 @@ export async function cleanupOrphanedWorktrees(store, { gracePeriodMs = GRACE_PE
       if (gracePeriodMs > 0) {
         try {
           const stat = await fs.promises.stat(worktree.absolutePath);
-          const ageMs = Date.now() - stat.birthtimeMs;
+          // birthtimeMs is unreliable on some Linux filesystems (returns 0);
+          // fall back to mtimeMs which is close to creation time for new dirs
+          const createdMs = stat.birthtimeMs > 0 ? stat.birthtimeMs : stat.mtimeMs;
+          const ageMs = Date.now() - createdMs;
           if (ageMs < gracePeriodMs) {
             result.skippedGrace++;
             console.log(`[cleanup] Skipping young orphan (${Math.round(ageMs / 1000)}s old): ${worktree.relativePath}`);

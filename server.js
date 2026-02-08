@@ -443,7 +443,14 @@ export function createServer({ testMode = false } = {}) {
 
   // --- Orphan Cleanup ---
 
+  let cleanupTimer = null;
+  let isCleanupRunning = false;
+
   app.post('/api/cleanup', async (req, res) => {
+    if (isCleanupRunning) {
+      return res.status(429).json({ error: 'Cleanup already in progress' });
+    }
+    isCleanupRunning = true;
     try {
       const result = await cleanupOrphanedWorktrees(store, {
         gracePeriodMs: testMode ? 0 : undefined,
@@ -451,6 +458,8 @@ export function createServer({ testMode = false } = {}) {
       res.json(result);
     } catch (e) {
       res.status(500).json({ error: `Cleanup failed: ${e.message}` });
+    } finally {
+      isCleanupRunning = false;
     }
   });
 
@@ -726,8 +735,6 @@ export function createServer({ testMode = false } = {}) {
 
   // --- Periodic Orphan Cleanup ---
 
-  let cleanupTimer = null;
-  let isCleanupRunning = false;
   const CLEANUP_INTERVAL_MS = 6 * 60 * 60 * 1000; // 6 hours
 
   async function runCleanup() {
