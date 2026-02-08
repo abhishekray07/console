@@ -260,18 +260,25 @@
     const resizeObserver = new ResizeObserver(handleResize);
     resizeObserver.observe(terminalEl);
 
-    // Sticky scroll: track user scroll position
+    // Sticky scroll: track user scroll position.
+    // Skip when a write-triggered scroll is pending — onScroll fires mid-write
+    // when baseY increases before viewport catches up, which would incorrectly
+    // set sticky=false and cancel the pending scroll.
     term.onScroll(() => {
+      if (claudePendingScroll) return;
+      const was = claudeSticky;
       claudeSticky = isNearBottom(term);
-      if (!claudeSticky) claudePendingScroll = false;
+      if (was && !claudeSticky) {
+        console.debug('[scroll] claude: user scrolled away from bottom');
+      }
     });
 
     // Sticky scroll: scroll after writes are parsed (frame-limited)
     term.onWriteParsed(() => {
-      if (claudePendingScroll) {
-        claudePendingScroll = false;
-        if (claudeSticky) term.scrollToBottom();
-      }
+      if (!claudePendingScroll) return;
+      claudePendingScroll = false;
+      term.scrollToBottom();
+      claudeSticky = true;
     });
   }
 
@@ -359,18 +366,22 @@
     const shellResizeObserver = new ResizeObserver(handleShellResize);
     shellResizeObserver.observe(shellTerminalEl);
 
-    // Sticky scroll: track user scroll position
+    // Sticky scroll: skip when write-triggered scroll is pending (same race fix)
     shellTerm.onScroll(() => {
+      if (shellPendingScroll) return;
+      const was = shellSticky;
       shellSticky = isNearBottom(shellTerm);
-      if (!shellSticky) shellPendingScroll = false;
+      if (was && !shellSticky) {
+        console.debug('[scroll] shell: user scrolled away from bottom');
+      }
     });
 
     // Sticky scroll: scroll after writes are parsed (frame-limited)
     shellTerm.onWriteParsed(() => {
-      if (shellPendingScroll) {
-        shellPendingScroll = false;
-        if (shellSticky) shellTerm.scrollToBottom();
-      }
+      if (!shellPendingScroll) return;
+      shellPendingScroll = false;
+      shellTerm.scrollToBottom();
+      shellSticky = true;
     });
   }
 
