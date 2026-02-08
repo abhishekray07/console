@@ -2,7 +2,6 @@
 
 A web-based multi-session manager for the Claude CLI. Run multiple Claude conversations in parallel, each isolated in its own git worktree.
 
-<!-- TODO: Replace with actual screenshot of the UI with multiple sessions and file viewer open -->
 ![Claude Console](docs/screenshot.png)
 
 ## Features
