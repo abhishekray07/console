@@ -968,11 +968,11 @@ export function createServer({ testMode = false } = {}) {
         const claudeProjectDir = getClaudeProjectDir(cwd);
         const jsonlFiles = fs.readdirSync(claudeProjectDir)
           .filter(f => f.endsWith('.jsonl'))
-          .map(f => ({
-            name: f,
-            mtime: fs.statSync(path.join(claudeProjectDir, f)).mtimeMs,
-          }))
-          .sort((a, b) => b.mtime - a.mtime); // most recently modified first
+          .map(f => {
+            const stat = fs.statSync(path.join(claudeProjectDir, f));
+            return { name: f, size: stat.size };
+          })
+          .sort((a, b) => b.size - a.size); // largest file first (real sessions, not stubs from failed resumes)
 
         if (jsonlFiles.length > 0) {
           const latestId = jsonlFiles[0].name.replace('.jsonl', '');
