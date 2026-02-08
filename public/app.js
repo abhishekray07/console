@@ -214,6 +214,16 @@
 
     fitAddon.fit();
 
+    term.attachCustomKeyEventHandler((event) => {
+      if (event.type === 'keydown' && event.key === 'Enter' && event.shiftKey) {
+        if (activeSessionId) {
+          wsSend(JSON.stringify({ type: 'input', data: '\x1b[13;2u' }));
+        }
+        return false;
+      }
+      return true;
+    });
+
     term.onData((data) => {
       if (activeSessionId) {
         wsSend(JSON.stringify({ type: 'input', data }));
@@ -287,6 +297,16 @@
     }
 
     shellFitAddon.fit();
+
+    shellTerm.attachCustomKeyEventHandler((event) => {
+      if (event.type === 'keydown' && event.key === 'Enter' && event.shiftKey) {
+        if (activeSessionId) {
+          wsSend(JSON.stringify({ type: 'shell-input', sessionId: activeSessionId, data: '\x1b[13;2u' }));
+        }
+        return false;
+      }
+      return true;
+    });
 
     shellTerm.onData((data) => {
       if (activeSessionId) {
