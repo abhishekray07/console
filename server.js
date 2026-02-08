@@ -966,13 +966,27 @@ export function createServer({ testMode = false } = {}) {
           cwd = resolved;
         }
         const claudeProjectDir = getClaudeProjectDir(cwd);
+        // Find the most recently modified JSONL that contains an actual conversation.
+        // Claude CLI creates stub files (only file-history-snapshot entries) on every
+        // launch including failed --resume attempts. Skip those.
         const jsonlFiles = fs.readdirSync(claudeProjectDir)
-          .filter(f => f.endsWith('.jsonl'))
-          .map(f => {
-            const stat = fs.statSync(path.join(claudeProjectDir, f));
-            return { name: f, size: stat.size };
+          .filter(f => {
+            if (!f.endsWith('.jsonl')) return false;
+            // Check if file has conversation data (not just snapshots)
+            const content = fs.readFileSync(path.join(claudeProjectDir, f), 'utf8');
+            const lines = content.split('\n').filter(Boolean);
+            return lines.some(line => {
+              try {
+                const t = JSON.parse(line).type;
+                return t && t !== 'file-history-snapshot';
+              } catch { return false; }
+            });
           })
-          .sort((a, b) => b.size - a.size); // largest file first (real sessions, not stubs from failed resumes)
+          .map(f => ({
+            name: f,
+            mtime: fs.statSync(path.join(claudeProjectDir, f)).mtimeMs,
+          }))
+          .sort((a, b) => b.mtime - a.mtime); // most recently modified conversation first
 
         if (jsonlFiles.length > 0) {
           const latestId = jsonlFiles[0].name.replace('.jsonl', '');
