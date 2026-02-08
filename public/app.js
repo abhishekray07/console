@@ -18,6 +18,20 @@
   let openTabs = []; // { id, filename, fullPath, content, type }
   let activeTabId = 'claude';
 
+  // --- Sticky scroll state ---
+  const NEAR_BOTTOM_LINES = 2;
+  let claudeSticky = true;
+  let claudePendingScroll = false;
+  let shellSticky = true;
+  let shellPendingScroll = false;
+
+  function isNearBottom(t) {
+    const buf = t.buffer.active;
+    // Alternate screen (e.g. vim, less) has no scrollback; always "at bottom"
+    if (buf.type === 'alternate') return true;
+    return (buf.baseY - buf.viewportY) <= NEAR_BOTTOM_LINES;
+  }
+
   // --- DOM refs ---
   const projectListEl = document.getElementById('project-list');
   const terminalEl = document.getElementById('terminal');
@@ -245,6 +259,20 @@
 
     const resizeObserver = new ResizeObserver(handleResize);
     resizeObserver.observe(terminalEl);
+
+    // Sticky scroll: track user scroll position
+    term.onScroll(() => {
+      claudeSticky = isNearBottom(term);
+      if (!claudeSticky) claudePendingScroll = false;
+    });
+
+    // Sticky scroll: scroll after writes are parsed (frame-limited)
+    term.onWriteParsed(() => {
+      if (claudePendingScroll) {
+        claudePendingScroll = false;
+        if (claudeSticky) term.scrollToBottom();
+      }
+    });
   }
 
   function initShellTerminal() {
@@ -330,6 +358,20 @@
 
     const shellResizeObserver = new ResizeObserver(handleShellResize);
     shellResizeObserver.observe(shellTerminalEl);
+
+    // Sticky scroll: track user scroll position
+    shellTerm.onScroll(() => {
+      shellSticky = isNearBottom(shellTerm);
+      if (!shellSticky) shellPendingScroll = false;
+    });
+
+    // Sticky scroll: scroll after writes are parsed (frame-limited)
+    shellTerm.onWriteParsed(() => {
+      if (shellPendingScroll) {
+        shellPendingScroll = false;
+        if (shellSticky) shellTerm.scrollToBottom();
+      }
+    });
   }
 
   // --- WebSocket ---
@@ -351,6 +393,7 @@
       switch (msg.type) {
         case 'output':
           if (msg.sessionId === activeSessionId && msg.data) {
+            if (claudeSticky) claudePendingScroll = true;
             term.write(msg.data);
           }
           break;
@@ -361,6 +404,7 @@
             term.write('', () => {
               requestAnimationFrame(() => {
                 term.scrollToBottom();
+                claudeSticky = true;
               });
             });
           }
@@ -403,6 +447,7 @@
 
         case 'shell-output':
           if (msg.sessionId === activeSessionId && msg.data) {
+            if (shellSticky) shellPendingScroll = true;
             shellTerm.write(msg.data);
           }
           break;
@@ -412,6 +457,7 @@
             shellTerm.write('', () => {
               requestAnimationFrame(() => {
                 shellTerm.scrollToBottom();
+                shellSticky = true;
               });
             });
           }
@@ -432,6 +478,10 @@
     activeSessionId = sessionId;
     term.reset();
     shellTerm.reset();
+    claudeSticky = true;
+    claudePendingScroll = false;
+    shellSticky = true;
+    shellPendingScroll = false;
     noSession.classList.add('hidden');
 
     // Show right panel and update path display
