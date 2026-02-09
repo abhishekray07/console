@@ -25,6 +25,14 @@
   let shellSticky = true;
   let shellPendingScroll = false;
 
+  // Attach auto-scroll: force scroll-to-bottom on every write during session
+  // attach until output settles. Covers replay buffer + SIGWINCH re-render.
+  let claudeAttachScroll = false;
+  let claudeAttachTimer = null;
+  let shellAttachScroll = false;
+  let shellAttachTimer = null;
+  const ATTACH_SETTLE_MS = 300;
+
   function isNearBottom(t) {
     const buf = t.buffer.active;
     // Alternate screen (e.g. vim, less) has no scrollback; always "at bottom"
@@ -260,18 +268,34 @@
     const resizeObserver = new ResizeObserver(handleResize);
     resizeObserver.observe(terminalEl);
 
-    // Sticky scroll: track user scroll position
+    // User wheel-up: disengage sticky scroll immediately.
+    // Wheel events only fire from user interaction, never from programmatic writes,
+    // so this cleanly separates user intent from write-induced scroll changes.
+    terminalEl.addEventListener('wheel', (e) => {
+      if (e.deltaY < 0) {
+        claudeSticky = false;
+        claudePendingScroll = false;
+        claudeAttachScroll = false;
+        clearTimeout(claudeAttachTimer);
+        console.log('[scroll] claude: wheel-up → sticky OFF');
+      }
+    }, { passive: true });
+
+    // Re-engage sticky when user scrolls back to bottom.
+    // Guard on pendingScroll to ignore write-induced scroll events.
     term.onScroll(() => {
-      claudeSticky = isNearBottom(term);
-      if (!claudeSticky) claudePendingScroll = false;
+      if (claudePendingScroll) return;
+      if (!claudeSticky && isNearBottom(term)) {
+        claudeSticky = true;
+        console.log('[scroll] claude: back at bottom → sticky ON');
+      }
     });
 
-    // Sticky scroll: scroll after writes are parsed (frame-limited)
+    // Scroll after writes are parsed (if sticky)
     term.onWriteParsed(() => {
-      if (claudePendingScroll) {
-        claudePendingScroll = false;
-        if (claudeSticky) term.scrollToBottom();
-      }
+      if (!claudePendingScroll) return;
+      claudePendingScroll = false;
+      term.scrollToBottom();
     });
   }
 
@@ -359,18 +383,31 @@
     const shellResizeObserver = new ResizeObserver(handleShellResize);
     shellResizeObserver.observe(shellTerminalEl);
 
-    // Sticky scroll: track user scroll position
+    // User wheel-up: disengage sticky scroll immediately
+    shellTerminalEl.addEventListener('wheel', (e) => {
+      if (e.deltaY < 0) {
+        shellSticky = false;
+        shellPendingScroll = false;
+        shellAttachScroll = false;
+        clearTimeout(shellAttachTimer);
+        console.log('[scroll] shell: wheel-up → sticky OFF');
+      }
+    }, { passive: true });
+
+    // Re-engage sticky when user scrolls back to bottom
     shellTerm.onScroll(() => {
-      shellSticky = isNearBottom(shellTerm);
-      if (!shellSticky) shellPendingScroll = false;
+      if (shellPendingScroll) return;
+      if (!shellSticky && isNearBottom(shellTerm)) {
+        shellSticky = true;
+        console.log('[scroll] shell: back at bottom → sticky ON');
+      }
     });
 
-    // Sticky scroll: scroll after writes are parsed (frame-limited)
+    // Scroll after writes are parsed (if sticky)
     shellTerm.onWriteParsed(() => {
-      if (shellPendingScroll) {
-        shellPendingScroll = false;
-        if (shellSticky) shellTerm.scrollToBottom();
-      }
+      if (!shellPendingScroll) return;
+      shellPendingScroll = false;
+      shellTerm.scrollToBottom();
     });
   }
 
@@ -393,16 +430,37 @@
       switch (msg.type) {
         case 'output':
           if (msg.sessionId === activeSessionId && msg.data) {
-            if (claudeSticky) claudePendingScroll = true;
+            const dataLen = msg.data.length;
+            // During attach, force scroll on every write until output settles
+            if (claudeAttachScroll) {
+              claudePendingScroll = true;
+              clearTimeout(claudeAttachTimer);
+              claudeAttachTimer = setTimeout(() => {
+                console.log('[scroll] claude attach settle timer fired → exiting attach mode');
+                claudeAttachScroll = false;
+                claudeSticky = true;
+              }, ATTACH_SETTLE_MS);
+              console.log('[scroll] claude output (attach mode, %d bytes) pendingScroll=true', dataLen);
+            } else if (claudeSticky) {
+              claudePendingScroll = true;
+              console.log('[scroll] claude output (sticky, %d bytes) pendingScroll=true', dataLen);
+            } else {
+              console.log('[scroll] claude output (NOT sticky, %d bytes) pendingScroll unchanged', dataLen);
+            }
             term.write(msg.data);
           }
           break;
 
         case 'replay-done':
           if (msg.sessionId === activeSessionId) {
-            // Wait for write pipeline to drain, then wait for render before scrolling
+            console.log('[scroll] claude replay-done received, scheduling scrollToBottom');
+            // Scroll after write queue drains. Attach auto-scroll stays active
+            // to also cover SIGWINCH re-render output arriving after this.
             term.write('', () => {
               requestAnimationFrame(() => {
+                const buf = term.buffer.active;
+                console.log('[scroll] claude replay-done → scrollToBottom (baseY=%d viewportY=%d)',
+                  buf.baseY, buf.viewportY);
                 term.scrollToBottom();
                 claudeSticky = true;
               });
@@ -447,7 +505,16 @@
 
         case 'shell-output':
           if (msg.sessionId === activeSessionId && msg.data) {
-            if (shellSticky) shellPendingScroll = true;
+            if (shellAttachScroll) {
+              shellPendingScroll = true;
+              clearTimeout(shellAttachTimer);
+              shellAttachTimer = setTimeout(() => {
+                shellAttachScroll = false;
+                shellSticky = true;
+              }, ATTACH_SETTLE_MS);
+            } else if (shellSticky) {
+              shellPendingScroll = true;
+            }
             shellTerm.write(msg.data);
           }
           break;
@@ -475,13 +542,21 @@
   }
 
   function attachSession(sessionId) {
+    console.log('[scroll] attachSession(%s) — entering attach auto-scroll mode', sessionId);
     activeSessionId = sessionId;
     term.reset();
     shellTerm.reset();
+
+    // Enter attach auto-scroll mode: force scroll-to-bottom on every write
+    // until output settles (covers replay buffer + SIGWINCH re-render)
+    claudeAttachScroll = true;
     claudeSticky = true;
     claudePendingScroll = false;
+    clearTimeout(claudeAttachTimer);
+    shellAttachScroll = true;
     shellSticky = true;
     shellPendingScroll = false;
+    clearTimeout(shellAttachTimer);
     noSession.classList.add('hidden');
 
     // Show right panel and update path display
