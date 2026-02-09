@@ -28,17 +28,109 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MAX_NAME_LENGTH = 100;
 const MAX_CWD_LENGTH = 1024;
 
+/**
+ * Validate that Claude Code PreToolUse hooks are configured.
+ * Since we spawn with --dangerously-skip-permissions, hooks are the safety net.
+ * In strict mode (remote HOST), throws on missing hooks (fail-closed).
+ * In default mode (localhost), logs warnings only (fail-open).
+ */
+function validateHooksConfig({ strict = false } = {}) {
+  const settingsPath = path.join(os.homedir(), '.claude', 'settings.json');
+
+  function fail(msg) {
+    if (strict) throw new Error(msg);
+    console.warn('WARNING: ' + msg);
+  }
+
+  try {
+    fs.accessSync(settingsPath, fs.constants.R_OK);
+  } catch {
+    fail('~/.claude/settings.json not found. PreToolUse hooks are not configured.');
+    if (!strict) console.warn('  Sessions run with --dangerously-skip-permissions and NO safety guardrails.');
+    return;
+  }
+
+  let settings;
+  try {
+    settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
+  } catch (e) {
+    fail(`Failed to parse ~/.claude/settings.json: ${e.message}`);
+    return;
+  }
+
+  const preToolUse = settings?.hooks?.PreToolUse;
+  if (!Array.isArray(preToolUse) || preToolUse.length === 0) {
+    fail('No PreToolUse hooks configured in ~/.claude/settings.json.');
+    if (!strict) console.warn('  Sessions run with --dangerously-skip-permissions and NO safety guardrails.');
+    return;
+  }
+
+  const bashHook = preToolUse.find((h) => h.matcher === 'Bash');
+  if (!bashHook) {
+    fail('No PreToolUse hook with matcher "Bash" found.');
+    if (!strict) console.warn('  Bash commands will not be validated before execution.');
+    return;
+  }
+
+  // Check that the hook script(s) exist and are executable
+  for (const hook of bashHook.hooks || []) {
+    if (hook.type === 'command' && hook.command) {
+      const scriptPath = hook.command.replace(/^~/, os.homedir()).replace(/"/g, '');
+      try {
+        fs.accessSync(scriptPath, fs.constants.X_OK);
+      } catch {
+        console.warn(`WARNING: Hook script not found or not executable: ${scriptPath}`);
+        console.warn('  Run: chmod +x ' + scriptPath);
+      }
+    }
+  }
+}
+
 export function createServer({ testMode = false } = {}) {
   const app = express();
   const server = http.createServer(app);
-  const wss = new WebSocketServer({ server, path: '/ws' });
+
+  function isAllowedOrigin(origin) {
+    if (!origin) return true; // No Origin header (e.g., non-browser clients)
+    try {
+      const { hostname } = new URL(origin);
+      if (hostname === 'localhost' || hostname === '127.0.0.1') return true;
+      if (/^100\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(hostname)) return true; // Tailscale CGNAT range
+      return false;
+    } catch {
+      return false;
+    }
+  }
+
+  const wss = new WebSocketServer({
+    server,
+    path: '/ws',
+    verifyClient: ({ req }) => isAllowedOrigin(req.headers.origin),
+  });
   const manager = new PtyManager();
 
   // In test mode, use bash instead of claude; in-memory SQLite
   const store = testMode ? createStore(':memory:') : createStore();
   const clients = new Set();
 
+  // Validate safety guardrails are in place (non-test only)
+  if (!testMode) {
+    const host = process.env.HOST || '127.0.0.1';
+    const isRemote = host !== '127.0.0.1' && host !== 'localhost';
+    validateHooksConfig({ strict: isRemote });
+  }
+
   app.use(express.json({ limit: '16kb' }));
+
+  app.get('/api/health', (_req, res) => {
+    const sessions = store.getAll().sessions;
+    res.json({
+      ok: true,
+      sessions: sessions.length,
+      uptime: process.uptime(),
+    });
+  });
+
   app.use(express.static(path.join(__dirname, 'public')));
 
   // --- Session-scoped file browser (for file tree) ---
@@ -1081,8 +1173,21 @@ export function createServer({ testMode = false } = {}) {
 // Run if executed directly (ESM-safe check)
 if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {
   const port = process.env.PORT || 3000;
+  const host = process.env.HOST || '127.0.0.1';
   const server = createServer();
-  server.listen(port, '127.0.0.1', () => {
-    console.log(`Claude Console running at http://127.0.0.1:${port}`);
+  server.listen(port, host, () => {
+    console.log(`Claude Console running at http://${host}:${port}`);
   });
+
+  let shuttingDown = false;
+  async function shutdown(signal) {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log(`\n${signal} received. Shutting down gracefully...`);
+    await server.destroy();
+    process.exit(0);
+  }
+
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdown('SIGINT'));
 }

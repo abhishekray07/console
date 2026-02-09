@@ -268,34 +268,25 @@
     const resizeObserver = new ResizeObserver(handleResize);
     resizeObserver.observe(terminalEl);
 
-    // User wheel-up: disengage sticky scroll immediately.
-    // Wheel events only fire from user interaction, never from programmatic writes,
-    // so this cleanly separates user intent from write-induced scroll changes.
-    terminalEl.addEventListener('wheel', (e) => {
-      if (e.deltaY < 0) {
-        claudeSticky = false;
-        claudePendingScroll = false;
-        claudeAttachScroll = false;
-        clearTimeout(claudeAttachTimer);
-        console.log('[scroll] claude: wheel-up → sticky OFF');
-      }
-    }, { passive: true });
-
-    // Re-engage sticky when user scrolls back to bottom.
-    // Guard on pendingScroll to ignore write-induced scroll events.
+    // Sticky scroll: track user scroll position.
+    // Skip during attach (forced auto-scroll) and when a write-triggered scroll
+    // is pending — onScroll fires mid-write when baseY increases before viewport
+    // catches up, which would incorrectly set sticky=false.
     term.onScroll(() => {
-      if (claudePendingScroll) return;
-      if (!claudeSticky && isNearBottom(term)) {
-        claudeSticky = true;
-        console.log('[scroll] claude: back at bottom → sticky ON');
+      if (claudeAttachScroll || claudePendingScroll) return;
+      const was = claudeSticky;
+      claudeSticky = isNearBottom(term);
+      if (was && !claudeSticky) {
+        console.debug('[scroll] claude: user scrolled away from bottom');
       }
     });
 
-    // Scroll after writes are parsed (if sticky)
+    // Sticky scroll: scroll after writes are parsed
     term.onWriteParsed(() => {
       if (!claudePendingScroll) return;
       claudePendingScroll = false;
       term.scrollToBottom();
+      claudeSticky = true;
     });
   }
 
@@ -383,31 +374,22 @@
     const shellResizeObserver = new ResizeObserver(handleShellResize);
     shellResizeObserver.observe(shellTerminalEl);
 
-    // User wheel-up: disengage sticky scroll immediately
-    shellTerminalEl.addEventListener('wheel', (e) => {
-      if (e.deltaY < 0) {
-        shellSticky = false;
-        shellPendingScroll = false;
-        shellAttachScroll = false;
-        clearTimeout(shellAttachTimer);
-        console.log('[scroll] shell: wheel-up → sticky OFF');
-      }
-    }, { passive: true });
-
-    // Re-engage sticky when user scrolls back to bottom
+    // Sticky scroll: skip during attach and when write-triggered scroll is pending
     shellTerm.onScroll(() => {
-      if (shellPendingScroll) return;
-      if (!shellSticky && isNearBottom(shellTerm)) {
-        shellSticky = true;
-        console.log('[scroll] shell: back at bottom → sticky ON');
+      if (shellAttachScroll || shellPendingScroll) return;
+      const was = shellSticky;
+      shellSticky = isNearBottom(shellTerm);
+      if (was && !shellSticky) {
+        console.debug('[scroll] shell: user scrolled away from bottom');
       }
     });
 
-    // Scroll after writes are parsed (if sticky)
+    // Sticky scroll: scroll after writes are parsed
     shellTerm.onWriteParsed(() => {
       if (!shellPendingScroll) return;
       shellPendingScroll = false;
       shellTerm.scrollToBottom();
+      shellSticky = true;
     });
   }
 
@@ -430,22 +412,16 @@
       switch (msg.type) {
         case 'output':
           if (msg.sessionId === activeSessionId && msg.data) {
-            const dataLen = msg.data.length;
             // During attach, force scroll on every write until output settles
             if (claudeAttachScroll) {
               claudePendingScroll = true;
               clearTimeout(claudeAttachTimer);
               claudeAttachTimer = setTimeout(() => {
-                console.log('[scroll] claude attach settle timer fired → exiting attach mode');
                 claudeAttachScroll = false;
                 claudeSticky = true;
               }, ATTACH_SETTLE_MS);
-              console.log('[scroll] claude output (attach mode, %d bytes) pendingScroll=true', dataLen);
             } else if (claudeSticky) {
               claudePendingScroll = true;
-              console.log('[scroll] claude output (sticky, %d bytes) pendingScroll=true', dataLen);
-            } else {
-              console.log('[scroll] claude output (NOT sticky, %d bytes) pendingScroll unchanged', dataLen);
             }
             term.write(msg.data);
           }
@@ -453,14 +429,10 @@
 
         case 'replay-done':
           if (msg.sessionId === activeSessionId) {
-            console.log('[scroll] claude replay-done received, scheduling scrollToBottom');
             // Scroll after write queue drains. Attach auto-scroll stays active
             // to also cover SIGWINCH re-render output arriving after this.
             term.write('', () => {
               requestAnimationFrame(() => {
-                const buf = term.buffer.active;
-                console.log('[scroll] claude replay-done → scrollToBottom (baseY=%d viewportY=%d)',
-                  buf.baseY, buf.viewportY);
                 term.scrollToBottom();
                 claudeSticky = true;
               });
@@ -542,7 +514,6 @@
   }
 
   function attachSession(sessionId) {
-    console.log('[scroll] attachSession(%s) — entering attach auto-scroll mode', sessionId);
     activeSessionId = sessionId;
     term.reset();
     shellTerm.reset();
