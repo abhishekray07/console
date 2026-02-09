@@ -1,7 +1,7 @@
 // test/pty-manager.test.js
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert';
-import { PtyManager } from '../pty-manager.js';
+import { PtyManager, buildSpawnCommand } from '../pty-manager.js';
 
 describe('PtyManager', () => {
   let manager;
@@ -112,6 +112,32 @@ describe('PtyManager', () => {
 
     await new Promise((resolve) => setTimeout(resolve, 1000));
     assert.ok(exitCalled, 'exit callback should have been called');
+  });
+});
+
+describe('buildSpawnCommand', () => {
+  it('new Claude session includes --dangerously-skip-permissions', () => {
+    const result = buildSpawnCommand({});
+    assert.strictEqual(result.command, 'claude');
+    assert.deepStrictEqual(result.cmdArgs, ['--dangerously-skip-permissions']);
+  });
+
+  it('resumed Claude session includes --resume and --dangerously-skip-permissions', () => {
+    const result = buildSpawnCommand({ resumeId: 'abc-123' });
+    assert.strictEqual(result.command, 'claude');
+    assert.deepStrictEqual(result.cmdArgs, ['--resume', 'abc-123', '--dangerously-skip-permissions']);
+  });
+
+  it('shell spawn does NOT include --dangerously-skip-permissions', () => {
+    const result = buildSpawnCommand({ shell: '/bin/bash', args: ['-c', 'sleep 1'] });
+    assert.strictEqual(result.command, '/bin/bash');
+    assert.deepStrictEqual(result.cmdArgs, ['-c', 'sleep 1']);
+  });
+
+  it('shell spawn with no args defaults to empty array', () => {
+    const result = buildSpawnCommand({ shell: '/bin/bash' });
+    assert.strictEqual(result.command, '/bin/bash');
+    assert.deepStrictEqual(result.cmdArgs, []);
   });
 });
 
