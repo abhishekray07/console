@@ -775,3 +775,69 @@ describe('Shell WebSocket', () => {
     ws.close();
   });
 });
+
+describe('WebSocket origin validation', () => {
+  let server;
+  let baseUrl;
+  let wsUrl;
+
+  before(async () => {
+    server = createServer({ testMode: true });
+    await new Promise((resolve) => server.listen(0, resolve));
+    const port = server.address().port;
+    baseUrl = `http://localhost:${port}`;
+    wsUrl = `ws://localhost:${port}/ws`;
+  });
+
+  after(async () => {
+    await server.destroy();
+  });
+
+  it('accepts WebSocket connections with no Origin header', async () => {
+    const { WebSocket } = await import('ws');
+    const ws = new WebSocket(wsUrl);
+    const opened = await new Promise((resolve) => {
+      ws.on('open', () => resolve(true));
+      ws.on('error', () => resolve(false));
+      setTimeout(() => resolve(false), 2000);
+    });
+    assert.ok(opened, 'WebSocket should connect without Origin');
+    ws.close();
+  });
+
+  it('accepts WebSocket connections from localhost Origin', async () => {
+    const { WebSocket } = await import('ws');
+    const ws = new WebSocket(wsUrl, { headers: { Origin: 'http://localhost:3000' } });
+    const opened = await new Promise((resolve) => {
+      ws.on('open', () => resolve(true));
+      ws.on('error', () => resolve(false));
+      setTimeout(() => resolve(false), 2000);
+    });
+    assert.ok(opened, 'WebSocket should connect with localhost Origin');
+    ws.close();
+  });
+
+  it('accepts WebSocket connections from Tailscale IP Origin', async () => {
+    const { WebSocket } = await import('ws');
+    const ws = new WebSocket(wsUrl, { headers: { Origin: 'http://100.64.1.1:3000' } });
+    const opened = await new Promise((resolve) => {
+      ws.on('open', () => resolve(true));
+      ws.on('error', () => resolve(false));
+      setTimeout(() => resolve(false), 2000);
+    });
+    assert.ok(opened, 'WebSocket should connect with Tailscale Origin');
+    ws.close();
+  });
+
+  it('rejects WebSocket connections from unexpected Origin', async () => {
+    const { WebSocket } = await import('ws');
+    const ws = new WebSocket(wsUrl, { headers: { Origin: 'http://evil.example.com' } });
+    const closed = await new Promise((resolve) => {
+      ws.on('open', () => resolve(false));
+      ws.on('close', () => resolve(true));
+      ws.on('error', () => resolve(true));
+      setTimeout(() => resolve(false), 2000);
+    });
+    assert.ok(closed, 'WebSocket should reject unexpected Origin');
+  });
+});

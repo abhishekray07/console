@@ -88,7 +88,24 @@ function validateHooksConfig({ strict = false } = {}) {
 export function createServer({ testMode = false } = {}) {
   const app = express();
   const server = http.createServer(app);
-  const wss = new WebSocketServer({ server, path: '/ws' });
+
+  function isAllowedOrigin(origin) {
+    if (!origin) return true; // No Origin header (e.g., non-browser clients)
+    try {
+      const { hostname } = new URL(origin);
+      if (hostname === 'localhost' || hostname === '127.0.0.1') return true;
+      if (/^100\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(hostname)) return true; // Tailscale CGNAT range
+      return false;
+    } catch {
+      return false;
+    }
+  }
+
+  const wss = new WebSocketServer({
+    server,
+    path: '/ws',
+    verifyClient: ({ req }) => isAllowedOrigin(req.headers.origin),
+  });
   const manager = new PtyManager();
 
   // In test mode, use bash instead of claude; in-memory SQLite
