@@ -841,3 +841,28 @@ describe('WebSocket origin validation', () => {
     assert.ok(closed, 'WebSocket should reject unexpected Origin');
   });
 });
+
+describe('Health endpoint', () => {
+  let server;
+  let baseUrl;
+
+  before(async () => {
+    server = createServer({ testMode: true });
+    await new Promise((resolve) => server.listen(0, resolve));
+    baseUrl = `http://localhost:${server.address().port}`;
+  });
+
+  after(async () => {
+    await server.destroy();
+  });
+
+  it('GET /api/health returns ok with session count and uptime', async () => {
+    const res = await fetch(`${baseUrl}/api/health`);
+    assert.strictEqual(res.status, 200);
+    const data = await res.json();
+    assert.strictEqual(data.ok, true);
+    assert.strictEqual(typeof data.sessions, 'number');
+    assert.strictEqual(typeof data.uptime, 'number');
+    assert.ok(data.uptime >= 0);
+  });
+});

@@ -120,6 +120,16 @@ export function createServer({ testMode = false } = {}) {
   }
 
   app.use(express.json({ limit: '16kb' }));
+
+  app.get('/api/health', (_req, res) => {
+    const sessions = store.getAll().sessions;
+    res.json({
+      ok: true,
+      sessions: sessions.length,
+      uptime: process.uptime(),
+    });
+  });
+
   app.use(express.static(path.join(__dirname, 'public')));
 
   // --- Session-scoped file browser (for file tree) ---
