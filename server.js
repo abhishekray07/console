@@ -31,7 +31,8 @@ const MAX_CWD_LENGTH = 1024;
 /**
  * Validate that Claude Code PreToolUse hooks are configured.
  * Since we spawn with --dangerously-skip-permissions, hooks are the safety net.
- * Logs warnings if hooks are missing (fail-open for startup, but noisy).
+ * In strict mode (remote HOST), throws on missing hooks (fail-closed).
+ * In default mode (localhost), logs warnings only (fail-open).
  */
 function validateHooksConfig({ strict = false } = {}) {
   const settingsPath = path.join(os.homedir(), '.claude', 'settings.json');

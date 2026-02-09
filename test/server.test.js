@@ -778,14 +778,12 @@ describe('Shell WebSocket', () => {
 
 describe('WebSocket origin validation', () => {
   let server;
-  let baseUrl;
   let wsUrl;
 
   before(async () => {
     server = createServer({ testMode: true });
     await new Promise((resolve) => server.listen(0, resolve));
     const port = server.address().port;
-    baseUrl = `http://localhost:${port}`;
     wsUrl = `ws://localhost:${port}/ws`;
   });
 
