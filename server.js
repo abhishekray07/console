@@ -1177,4 +1177,16 @@ if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) 
   server.listen(port, host, () => {
     console.log(`Claude Console running at http://${host}:${port}`);
   });
+
+  let shuttingDown = false;
+  async function shutdown(signal) {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log(`\n${signal} received. Shutting down gracefully...`);
+    await server.destroy();
+    process.exit(0);
+  }
+
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdown('SIGINT'));
 }
