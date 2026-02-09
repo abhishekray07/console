@@ -40,7 +40,7 @@ Run before committing:
 ## Don't
 
 - Don't modify session UUID regex in server.js — it enables `claude --resume`. Read the regex and surrounding comments before touching session capture logic.
-- Don't expose server publicly — `/api/browse` and `/api/file` serve filesystem contents. Server MUST remain bound to 127.0.0.1.
+- Don't expose server publicly — `/api/browse` and `/api/file` serve filesystem contents. Default bind is 127.0.0.1. For remote deployment, set `HOST=0.0.0.0` only behind Tailscale + UFW firewall (see `docs/plans/2026-02-09-remote-deployment-design.md`).
 - Don't edit files in public/vendor/ — these are vendored third-party libs. Update by re-downloading from CDN.
 - Don't commit `.worktrees/` — sessions run in isolated worktrees. Branch naming: `claude/{name}-{uuid}`. See `docs/worktree-guide.md` for details.
 - Don't bypass path traversal checks — `/api/file` and session-scoped `/api/browse` validate paths server-side with symlink-safe realpath checks. All file access goes through worktree root resolution.
