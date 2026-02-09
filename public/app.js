@@ -268,34 +268,34 @@
     const resizeObserver = new ResizeObserver(handleResize);
     resizeObserver.observe(terminalEl);
 
-    // Sticky scroll: track user scroll position.
-    // Skip during attach (forced auto-scroll) and when a write-triggered scroll
-    // is pending — onScroll fires mid-write when baseY increases before viewport
-    // catches up, which would incorrectly set sticky=false.
-    term.onScroll(() => {
-      const buf = term.buffer.active;
-      if (claudeAttachScroll || claudePendingScroll) {
-        console.log('[scroll] claude onScroll SKIPPED (attach=%s pending=%s) baseY=%d viewportY=%d',
-          claudeAttachScroll, claudePendingScroll, buf.baseY, buf.viewportY);
-        return;
+    // User wheel-up: disengage sticky scroll immediately.
+    // Wheel events only fire from user interaction, never from programmatic writes,
+    // so this cleanly separates user intent from write-induced scroll changes.
+    terminalEl.addEventListener('wheel', (e) => {
+      if (e.deltaY < 0) {
+        claudeSticky = false;
+        claudePendingScroll = false;
+        claudeAttachScroll = false;
+        clearTimeout(claudeAttachTimer);
+        console.log('[scroll] claude: wheel-up → sticky OFF');
       }
-      const was = claudeSticky;
-      claudeSticky = isNearBottom(term);
-      if (was !== claudeSticky) {
-        console.log('[scroll] claude sticky: %s → %s (baseY=%d viewportY=%d gap=%d)',
-          was, claudeSticky, buf.baseY, buf.viewportY, buf.baseY - buf.viewportY);
+    }, { passive: true });
+
+    // Re-engage sticky when user scrolls back to bottom.
+    // Guard on pendingScroll to ignore write-induced scroll events.
+    term.onScroll(() => {
+      if (claudePendingScroll) return;
+      if (!claudeSticky && isNearBottom(term)) {
+        claudeSticky = true;
+        console.log('[scroll] claude: back at bottom → sticky ON');
       }
     });
 
-    // Sticky scroll: scroll after writes are parsed
+    // Scroll after writes are parsed (if sticky)
     term.onWriteParsed(() => {
-      const buf = term.buffer.active;
       if (!claudePendingScroll) return;
       claudePendingScroll = false;
-      console.log('[scroll] claude onWriteParsed → scrollToBottom (attach=%s baseY=%d viewportY=%d)',
-        claudeAttachScroll, buf.baseY, buf.viewportY);
       term.scrollToBottom();
-      claudeSticky = true;
     });
   }
 
@@ -383,22 +383,31 @@
     const shellResizeObserver = new ResizeObserver(handleShellResize);
     shellResizeObserver.observe(shellTerminalEl);
 
-    // Sticky scroll: skip during attach and when write-triggered scroll is pending
+    // User wheel-up: disengage sticky scroll immediately
+    shellTerminalEl.addEventListener('wheel', (e) => {
+      if (e.deltaY < 0) {
+        shellSticky = false;
+        shellPendingScroll = false;
+        shellAttachScroll = false;
+        clearTimeout(shellAttachTimer);
+        console.log('[scroll] shell: wheel-up → sticky OFF');
+      }
+    }, { passive: true });
+
+    // Re-engage sticky when user scrolls back to bottom
     shellTerm.onScroll(() => {
-      if (shellAttachScroll || shellPendingScroll) return;
-      const was = shellSticky;
-      shellSticky = isNearBottom(shellTerm);
-      if (was && !shellSticky) {
-        console.log('[scroll] shell: user scrolled away from bottom');
+      if (shellPendingScroll) return;
+      if (!shellSticky && isNearBottom(shellTerm)) {
+        shellSticky = true;
+        console.log('[scroll] shell: back at bottom → sticky ON');
       }
     });
 
-    // Sticky scroll: scroll after writes are parsed
+    // Scroll after writes are parsed (if sticky)
     shellTerm.onWriteParsed(() => {
       if (!shellPendingScroll) return;
       shellPendingScroll = false;
       shellTerm.scrollToBottom();
-      shellSticky = true;
     });
   }
 
