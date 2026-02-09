@@ -1,0 +1,3 @@
+config:
+  claude-console:serverType: cx53
+  claude-console:location: fsn1

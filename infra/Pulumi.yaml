@@ -1,0 +1,3 @@
+name: claude-console-infra
+runtime: nodejs
+description: Hetzner CX53 VPS for Claude Console
