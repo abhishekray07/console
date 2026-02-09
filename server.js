@@ -1138,8 +1138,9 @@ export function createServer({ testMode = false } = {}) {
 // Run if executed directly (ESM-safe check)
 if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {
   const port = process.env.PORT || 3000;
+  const host = process.env.HOST || '127.0.0.1';
   const server = createServer();
-  server.listen(port, '127.0.0.1', () => {
-    console.log(`Claude Console running at http://127.0.0.1:${port}`);
+  server.listen(port, host, () => {
+    console.log(`Claude Console running at http://${host}:${port}`);
   });
 }
