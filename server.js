@@ -33,14 +33,19 @@ const MAX_CWD_LENGTH = 1024;
  * Since we spawn with --dangerously-skip-permissions, hooks are the safety net.
  * Logs warnings if hooks are missing (fail-open for startup, but noisy).
  */
-function validateHooksConfig() {
+function validateHooksConfig({ strict = false } = {}) {
   const settingsPath = path.join(os.homedir(), '.claude', 'settings.json');
+
+  function fail(msg) {
+    if (strict) throw new Error(msg);
+    console.warn('WARNING: ' + msg);
+  }
 
   try {
     fs.accessSync(settingsPath, fs.constants.R_OK);
   } catch {
-    console.warn('WARNING: ~/.claude/settings.json not found. PreToolUse hooks are not configured.');
-    console.warn('  Sessions run with --dangerously-skip-permissions and NO safety guardrails.');
+    fail('~/.claude/settings.json not found. PreToolUse hooks are not configured.');
+    if (!strict) console.warn('  Sessions run with --dangerously-skip-permissions and NO safety guardrails.');
     return;
   }
 
@@ -48,21 +53,21 @@ function validateHooksConfig() {
   try {
     settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
   } catch (e) {
-    console.warn(`WARNING: Failed to parse ~/.claude/settings.json: ${e.message}`);
+    fail(`Failed to parse ~/.claude/settings.json: ${e.message}`);
     return;
   }
 
   const preToolUse = settings?.hooks?.PreToolUse;
   if (!Array.isArray(preToolUse) || preToolUse.length === 0) {
-    console.warn('WARNING: No PreToolUse hooks configured in ~/.claude/settings.json.');
-    console.warn('  Sessions run with --dangerously-skip-permissions and NO safety guardrails.');
+    fail('No PreToolUse hooks configured in ~/.claude/settings.json.');
+    if (!strict) console.warn('  Sessions run with --dangerously-skip-permissions and NO safety guardrails.');
     return;
   }
 
   const bashHook = preToolUse.find((h) => h.matcher === 'Bash');
   if (!bashHook) {
-    console.warn('WARNING: No PreToolUse hook with matcher "Bash" found.');
-    console.warn('  Bash commands will not be validated before execution.');
+    fail('No PreToolUse hook with matcher "Bash" found.');
+    if (!strict) console.warn('  Bash commands will not be validated before execution.');
     return;
   }
 
@@ -92,7 +97,9 @@ export function createServer({ testMode = false } = {}) {
 
   // Validate safety guardrails are in place (non-test only)
   if (!testMode) {
-    validateHooksConfig();
+    const host = process.env.HOST || '127.0.0.1';
+    const isRemote = host !== '127.0.0.1' && host !== 'localhost';
+    validateHooksConfig({ strict: isRemote });
   }
 
   app.use(express.json({ limit: '16kb' }));
