@@ -501,6 +501,20 @@
             });
           }
           break;
+
+        case 'image-upload-ok':
+          if (msg.path) {
+            navigator.clipboard.writeText(msg.path).then(() => {
+              showToast('Image saved — path copied to clipboard', 'success', 4000);
+            }).catch(() => {
+              showToast('Image saved: ' + msg.path, 'success', 6000);
+            });
+          }
+          break;
+
+        case 'image-upload-error':
+          showToast(msg.error || 'Image upload failed', 'error');
+          break;
       }
     };
 
@@ -1376,6 +1390,36 @@
       document.body.style.userSelect = '';
       if (shellFitAddon) shellFitAddon.fit();
     }
+  });
+
+  // --- Clipboard Image Paste ---
+
+  document.addEventListener('paste', (e) => {
+    if (!activeSessionId) return;
+
+    const items = e.clipboardData?.items;
+    if (!items) return;
+
+    const imageItem = Array.from(items).find(i => i.type.startsWith('image/'));
+    if (!imageItem) return; // Not an image paste, let xterm handle it
+
+    e.preventDefault();
+    e.stopPropagation();
+
+    const blob = imageItem.getAsFile();
+    if (!blob) return;
+
+    showToast('Uploading image...', 'info', 2000);
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      const b64 = reader.result.split(',')[1]; // strip data:image/...;base64, prefix
+      wsSend(JSON.stringify({ type: 'image-upload', sessionId: activeSessionId, data: b64 }));
+    };
+    reader.onerror = () => {
+      showToast('Failed to read image from clipboard', 'error');
+    };
+    reader.readAsDataURL(blob);
   });
 
   // --- Init ---
