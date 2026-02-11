@@ -635,6 +635,59 @@
   function renderSidebar() {
     projectListEl.innerHTML = '';
 
+    // Mobile: show flat "Recent" section for quick session switching
+    if (isMobile() && sessions.length > 0) {
+      const recentSessions = [...sessions]
+        .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+        .slice(0, 5);
+
+      const recentGroup = document.createElement('div');
+      recentGroup.className = 'project-group';
+
+      const recentHeader = document.createElement('div');
+      recentHeader.className = 'project-header';
+      recentHeader.style.pointerEvents = 'none';
+
+      const recentName = document.createElement('span');
+      recentName.className = 'project-name';
+      recentName.textContent = 'Recent';
+      recentName.style.color = '#6b7280';
+      recentName.style.fontSize = '12px';
+      recentName.style.textTransform = 'uppercase';
+      recentName.style.letterSpacing = '0.05em';
+      recentHeader.appendChild(recentName);
+      recentGroup.appendChild(recentHeader);
+
+      const recentUl = document.createElement('ul');
+      recentUl.className = 'project-sessions expanded';
+
+      for (const s of recentSessions) {
+        const li = document.createElement('li');
+        if (s.id === activeSessionId) li.classList.add('active');
+
+        const dot = document.createElement('span');
+        dot.className = 'status-dot ' + (s.alive ? 'alive' : 'exited');
+
+        const sName = document.createElement('span');
+        sName.className = 'session-name';
+        sName.textContent = s.name;
+
+        li.appendChild(dot);
+        li.appendChild(sName);
+        li.onclick = () => {
+          if (!s.alive && s.claudeSessionId) {
+            restartSession(s.id);
+          }
+          attachSession(s.id);
+          closeMobileSidebar();
+        };
+        recentUl.appendChild(li);
+      }
+
+      recentGroup.appendChild(recentUl);
+      projectListEl.appendChild(recentGroup);
+    }
+
     // Sort projects by createdAt ascending (design spec)
     const sortedProjects = [...projects].sort((a, b) =>
       new Date(a.createdAt) - new Date(b.createdAt));
