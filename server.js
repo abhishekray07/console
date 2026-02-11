@@ -122,6 +122,14 @@ export function createServer({ testMode = false } = {}) {
 
   app.use(express.json({ limit: '16kb' }));
 
+  // --- CORS / Origin validation for all API routes ---
+  app.use('/api', (req, res, next) => {
+    if (!isAllowedOrigin(req.headers.origin)) {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
+    next();
+  });
+
   app.get('/api/health', (_req, res) => {
     const sessions = store.getAll().sessions;
     res.json({
@@ -1059,6 +1067,84 @@ export function createServer({ testMode = false } = {}) {
         case 'shell-resize': {
           if (msg.sessionId && msg.cols && msg.rows) {
             manager.resizeShell(msg.sessionId, msg.cols, msg.rows);
+          }
+          break;
+        }
+
+        case 'image-upload': {
+          const { sessionId, data: b64Data } = msg;
+          if (!sessionId || !b64Data) {
+            safeSend(ws, JSON.stringify({ type: 'image-upload-error', error: 'Missing sessionId or data' }));
+            break;
+          }
+
+          const session = store.getSession(sessionId);
+          if (!session) {
+            safeSend(ws, JSON.stringify({ type: 'image-upload-error', error: 'Session not found' }));
+            break;
+          }
+
+          const project = store.getProject(session.projectId);
+          if (!project) {
+            safeSend(ws, JSON.stringify({ type: 'image-upload-error', error: 'Project not found' }));
+            break;
+          }
+
+          // Decode base64
+          let buf;
+          try {
+            buf = Buffer.from(b64Data, 'base64');
+          } catch {
+            safeSend(ws, JSON.stringify({ type: 'image-upload-error', error: 'Invalid base64 data' }));
+            break;
+          }
+
+          // 10MB limit
+          if (buf.length > 10 * 1024 * 1024) {
+            safeSend(ws, JSON.stringify({ type: 'image-upload-error', error: 'Image too large (max 10MB)' }));
+            break;
+          }
+
+          // Validate magic bytes and determine extension
+          const magic = buf.subarray(0, 12);
+          let ext;
+          if (magic[0] === 0x89 && magic[1] === 0x50 && magic[2] === 0x4E && magic[3] === 0x47) {
+            ext = 'png';
+          } else if (magic[0] === 0xFF && magic[1] === 0xD8 && magic[2] === 0xFF) {
+            ext = 'jpg';
+          } else if (magic[0] === 0x47 && magic[1] === 0x49 && magic[2] === 0x46 && magic[3] === 0x38) {
+            ext = 'gif';
+          } else if (magic.length >= 12 && magic[0] === 0x52 && magic[1] === 0x49 && magic[2] === 0x46 && magic[3] === 0x46
+                     && magic[8] === 0x57 && magic[9] === 0x45 && magic[10] === 0x42 && magic[11] === 0x50) {
+            ext = 'webp';
+          } else {
+            safeSend(ws, JSON.stringify({ type: 'image-upload-error', error: 'Not a valid image (PNG, JPEG, GIF, WebP)' }));
+            break;
+          }
+
+          // Resolve worktree root for session-scoped storage
+          let worktreeRoot;
+          if (session.worktreePath) {
+            try {
+              worktreeRoot = await resolveWorktreePath(project.cwd, session.worktreePath);
+            } catch {
+              safeSend(ws, JSON.stringify({ type: 'image-upload-error', error: 'Cannot resolve worktree' }));
+              break;
+            }
+          } else {
+            worktreeRoot = project.cwd;
+          }
+
+          const uploadDir = path.join(worktreeRoot, '.claude-uploads');
+          const filename = `${Date.now()}-${crypto.randomBytes(4).toString('hex')}.${ext}`;
+
+          try {
+            await fs.promises.mkdir(uploadDir, { recursive: true });
+            const filePath = path.join(uploadDir, filename);
+            await fs.promises.writeFile(filePath, buf, { flag: 'wx' });
+            safeSend(ws, JSON.stringify({ type: 'image-upload-ok', path: filePath }));
+          } catch (e) {
+            safeSend(ws, JSON.stringify({ type: 'image-upload-error', error: `Save failed: ${e.message}` }));
           }
           break;
         }
