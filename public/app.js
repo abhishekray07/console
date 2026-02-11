@@ -69,6 +69,30 @@
   const btnToggleFileTree = document.getElementById('btn-toggle-file-tree');
   const fileTreeSection = document.getElementById('file-tree-section');
 
+  // --- Mobile responsive DOM refs ---
+  const sidebarEl = document.getElementById('sidebar');
+  const sidebarBackdrop = document.getElementById('sidebar-backdrop');
+  const mobileHamburger = document.getElementById('mobile-hamburger');
+  const mobileSessionInfo = document.getElementById('mobile-session-info');
+  const mobileSessionName = document.getElementById('mobile-session-name');
+  const mobileStatusDot = document.getElementById('mobile-status-dot');
+  const mobileNewSession = document.getElementById('mobile-new-session');
+
+  // --- Mobile sidebar ---
+  function isMobile() {
+    return window.matchMedia('(max-width: 768px)').matches;
+  }
+
+  function openMobileSidebar() {
+    sidebarEl.classList.add('open');
+    sidebarBackdrop.classList.add('visible');
+  }
+
+  function closeMobileSidebar() {
+    sidebarEl.classList.remove('open');
+    sidebarBackdrop.classList.remove('visible');
+  }
+
   // --- Helpers ---
   function wsSend(data) {
     if (ws && ws.readyState === WebSocket.OPEN) {
@@ -708,6 +732,7 @@
             restartSession(s.id);
           }
           attachSession(s.id);
+          closeMobileSidebar();
         };
 
         ul.appendChild(li);
@@ -1420,6 +1445,30 @@
       showToast('Failed to read image from clipboard', 'error');
     };
     reader.readAsDataURL(blob);
+  });
+
+  // --- Mobile event listeners ---
+  mobileHamburger.addEventListener('click', () => {
+    if (sidebarEl.classList.contains('open')) {
+      closeMobileSidebar();
+    } else {
+      openMobileSidebar();
+    }
+  });
+
+  mobileSessionInfo.addEventListener('click', () => {
+    openMobileSidebar();
+  });
+
+  sidebarBackdrop.addEventListener('click', () => {
+    closeMobileSidebar();
+  });
+
+  // Reset sidebar state when crossing breakpoint (e.g. rotating tablet)
+  window.matchMedia('(max-width: 768px)').addEventListener('change', (e) => {
+    if (!e.matches) {
+      closeMobileSidebar();
+    }
   });
 
   // --- Init ---
