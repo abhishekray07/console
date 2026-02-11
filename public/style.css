@@ -901,3 +901,141 @@ body {
 #sidebar-backdrop {
   display: none;
 }
+
+/* --- Mobile responsive: layout (max-width: 768px) --- */
+
+@media (max-width: 768px) {
+  /* Sidebar: off-screen fixed overlay */
+  #sidebar {
+    position: fixed;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    z-index: 1000;
+    transform: translateX(-100%);
+    transition: transform 0.2s ease;
+    will-change: transform;
+    padding-top: env(safe-area-inset-top);
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  #sidebar.open {
+    transform: translateX(0);
+  }
+
+  /* Backdrop behind sidebar */
+  #sidebar-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.5);
+    z-index: 999;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.2s ease;
+  }
+  #sidebar-backdrop.visible {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  /* Hide right panel entirely */
+  #right-panel {
+    display: none !important;
+  }
+
+  /* Hide tab bar */
+  #tab-bar {
+    display: none !important;
+  }
+
+  /* Main area: fill width via flex (not 100vw) */
+  #terminal-container {
+    width: 100%;
+  }
+
+  /* Mobile top bar */
+  #mobile-topbar {
+    display: flex;
+    align-items: center;
+    height: calc(44px + env(safe-area-inset-top));
+    padding-top: env(safe-area-inset-top);
+    padding-left: 8px;
+    padding-right: 8px;
+    background: #16213e;
+    border-bottom: 1px solid #0f3460;
+    flex-shrink: 0;
+    z-index: 2;
+    position: relative;
+  }
+
+  #mobile-hamburger {
+    background: none;
+    border: none;
+    color: #e0e0e0;
+    font-size: 20px;
+    width: 44px;
+    height: 44px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+
+  #mobile-session-info {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0 8px;
+    cursor: pointer;
+  }
+
+  #mobile-session-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 14px;
+    font-weight: 600;
+  }
+
+  #mobile-topbar .status-dot {
+    width: 10px;
+    height: 10px;
+    flex-shrink: 0;
+  }
+
+  #mobile-new-session {
+    background: #0f3460;
+    border: none;
+    color: #e0e0e0;
+    font-size: 18px;
+    width: 44px;
+    height: 44px;
+    border-radius: 6px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+
+  /* Terminal wrapper: offset below topbar.
+     !important overrides inline style.inset set by switchTab() and state reconciliation.
+     This is safe because tab-bar is hidden on mobile, so the JS inset values (32px for
+     tab bar offset, 0 for no tabs) are irrelevant — mobile always needs topbar offset. */
+  #terminal-wrapper {
+    inset: calc(44px + env(safe-area-inset-top)) 0 0 0 !important;
+  }
+
+  /* No-session placeholder: offset below topbar */
+  #no-session {
+    inset: calc(44px + env(safe-area-inset-top)) 0 0 0;
+  }
+
+  /* File viewer: offset below topbar (hidden on mobile but just in case) */
+  #file-viewer {
+    inset: calc(44px + env(safe-area-inset-top)) 0 0 0;
+  }
+}
