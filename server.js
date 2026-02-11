@@ -854,6 +854,50 @@ export function createServer({ testMode = false } = {}) {
     let shellDataListener = null;
     let attachedShellSessionId = null;
 
+    // --- Batched output: accumulate PTY chunks and flush every ~16ms ---
+    const BATCH_INTERVAL_MS = 16;
+    const BATCH_MAX_BYTES = 64 * 1024; // flush if batch exceeds 64KB
+    let claudeBatch = '';
+    let claudeBatchTimer = null;
+    let shellBatch = '';
+    let shellBatchTimer = null;
+
+    function flushClaudeBatch() {
+      clearTimeout(claudeBatchTimer);
+      claudeBatchTimer = null;
+      if (claudeBatch && attachedSessionId) {
+        safeSend(ws, JSON.stringify({ type: 'output', sessionId: attachedSessionId, data: claudeBatch }));
+        claudeBatch = '';
+      }
+    }
+
+    function flushShellBatch() {
+      clearTimeout(shellBatchTimer);
+      shellBatchTimer = null;
+      if (shellBatch && attachedShellSessionId) {
+        safeSend(ws, JSON.stringify({ type: 'shell-output', sessionId: attachedShellSessionId, data: shellBatch }));
+        shellBatch = '';
+      }
+    }
+
+    function batchClaudeOutput(data) {
+      claudeBatch += data;
+      if (claudeBatch.length >= BATCH_MAX_BYTES) {
+        flushClaudeBatch();
+      } else if (!claudeBatchTimer) {
+        claudeBatchTimer = setTimeout(flushClaudeBatch, BATCH_INTERVAL_MS);
+      }
+    }
+
+    function batchShellOutput(data) {
+      shellBatch += data;
+      if (shellBatch.length >= BATCH_MAX_BYTES) {
+        flushShellBatch();
+      } else if (!shellBatchTimer) {
+        shellBatchTimer = setTimeout(flushShellBatch, BATCH_INTERVAL_MS);
+      }
+    }
+
     ws.on('message', async (raw) => {
       let msg;
       try {
@@ -866,12 +910,19 @@ export function createServer({ testMode = false } = {}) {
         case 'attach': {
           const { sessionId, cols, rows } = msg;
           const proc = manager.getProcess(sessionId);
-          if (!proc) break;
 
-          // Detach from previous
+          // Detach from previous session regardless of whether new attach succeeds
           if (attachedSessionId && dataListener) {
+            flushClaudeBatch();
             manager.offData(attachedSessionId, dataListener);
             dataListener = null;
+          }
+
+          // Reject attach if process doesn't exist or is dead
+          if (!proc || !manager.isAlive(sessionId)) {
+            attachedSessionId = null;
+            safeSend(ws, JSON.stringify({ type: 'attach-error', sessionId }));
+            break;
           }
 
           attachedSessionId = sessionId;
@@ -890,7 +941,7 @@ export function createServer({ testMode = false } = {}) {
             if (replaying) {
               pendingData.push(d);
             } else {
-              safeSend(ws, JSON.stringify({ type: 'output', sessionId, data: d }));
+              batchClaudeOutput(d);
             }
           };
           manager.onData(sessionId, dataListener);
@@ -902,11 +953,12 @@ export function createServer({ testMode = false } = {}) {
             safeSend(ws, JSON.stringify({ type: 'output', sessionId, data: combined }));
           }
 
-          // Flush any data that arrived during replay, then switch to live
+          // Flush any data that arrived during replay via batch, then switch to live
           replaying = false;
           for (const d of pendingData) {
-            safeSend(ws, JSON.stringify({ type: 'output', sessionId, data: d }));
+            claudeBatch += d;
           }
+          flushClaudeBatch();
 
           // Send replay-done AFTER all data (buffer + pending) is sent
           safeSend(ws, JSON.stringify({ type: 'replay-done', sessionId }));
@@ -950,6 +1002,7 @@ export function createServer({ testMode = false } = {}) {
           // Detach previous shell listener (use dedicated tracking variable
           // since attachedSessionId may already point to the new session)
           if (attachedShellSessionId && shellDataListener) {
+            flushShellBatch();
             manager.offShellData(attachedShellSessionId, shellDataListener);
             shellDataListener = null;
           }
@@ -981,7 +1034,7 @@ export function createServer({ testMode = false } = {}) {
             if (shellReplaying) {
               shellPending.push(d);
             } else {
-              safeSend(ws, JSON.stringify({ type: 'shell-output', sessionId, data: d }));
+              batchShellOutput(d);
             }
           };
           manager.onShellData(sessionId, shellDataListener);
@@ -993,11 +1046,12 @@ export function createServer({ testMode = false } = {}) {
             safeSend(ws, JSON.stringify({ type: 'shell-output', sessionId, data: combined }));
           }
 
-          // Flush pending and switch to live
+          // Flush pending via batch, then switch to live
           shellReplaying = false;
           for (const d of shellPending) {
-            safeSend(ws, JSON.stringify({ type: 'shell-output', sessionId, data: d }));
+            shellBatch += d;
           }
+          flushShellBatch();
 
           safeSend(ws, JSON.stringify({ type: 'shell-replay-done', sessionId }));
           break;
@@ -1099,6 +1153,8 @@ export function createServer({ testMode = false } = {}) {
 
     ws.on('close', () => {
       clients.delete(ws);
+      clearTimeout(claudeBatchTimer);
+      clearTimeout(shellBatchTimer);
       if (attachedSessionId && dataListener) {
         manager.offData(attachedSessionId, dataListener);
       }

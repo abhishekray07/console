@@ -48,6 +48,7 @@ apt-get install -y git build-essential tmux ufw
 # --- Dedicated user ---
 useradd -m -s /bin/bash claude-dev || true
 mkdir -p /home/claude-dev/.claude-console
+chown claude-dev:claude-dev /home/claude-dev/.claude-console
 
 # --- Node.js 22 ---
 curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
@@ -70,6 +71,22 @@ ufw allow in on tailscale0 to any port 3000
 ufw allow in on tailscale0 to any port 22
 ufw allow in on tailscale0 to any port 8080
 ufw --force enable
+
+# --- Claude settings (required for fail-closed hook validation) ---
+mkdir -p /home/claude-dev/.claude
+cat > /home/claude-dev/.claude/settings.json <<'SETTINGSEOF'
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": []
+      }
+    ]
+  }
+}
+SETTINGSEOF
+chown -R claude-dev:claude-dev /home/claude-dev/.claude
 
 # --- Git credentials for claude-dev ---
 sudo -u claude-dev git config --global credential.helper store

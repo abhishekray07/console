@@ -499,6 +499,13 @@
           }
           break;
 
+        case 'attach-error':
+          if (msg.sessionId === activeSessionId) {
+            term.reset();
+            term.write('\x1b[31m\r\n  Failed to attach to session.\x1b[0m\r\n');
+          }
+          break;
+
         case 'state':
           projects = msg.projects;
           sessions = msg.sessions;
@@ -590,10 +597,15 @@
     ws.onerror = () => { ws.close(); };
   }
 
-  function attachSession(sessionId) {
+  function attachSession(sessionId, opts = {}) {
     activeSessionId = sessionId;
     term.reset();
     shellTerm.reset();
+
+    if (opts.showLoading) {
+      // Show loading indicator while waiting for restart to complete
+      term.write('\x1b[2m\r\n  Resuming session\u2026\x1b[0m');
+    }
 
     // Enter attach auto-scroll mode: force scroll-to-bottom on every write
     // until output settles (covers replay buffer + SIGWINCH re-render)
@@ -622,6 +634,12 @@
       initFileTree();
     } else {
       rightPanel.classList.add('hidden');
+    }
+
+    // In loading-only mode, don't send attach yet (restart hasn't completed)
+    if (opts.showLoading) {
+      renderSidebar();
+      return;
     }
 
     wsSend(JSON.stringify({
@@ -817,11 +835,20 @@
         li.appendChild(time);
         li.appendChild(actions);
 
-        li.onclick = () => {
+        li.onclick = async () => {
+          // Guard against rapid clicking: ignore if already switching to this session
+          if (activeSessionId === s.id && s.alive) return;
+
           if (!s.alive && s.claudeSessionId) {
-            restartSession(s.id);
+            // Show loading state immediately while restart is in progress
+            attachSession(s.id, { showLoading: true });
+            const ok = await restartSession(s.id);
+            // Guard: user may have switched to a different session while waiting
+            if (!ok || activeSessionId !== s.id) return;
+            attachSession(s.id);
+          } else {
+            attachSession(s.id);
           }
-          attachSession(s.id);
           closeMobileSidebar();
         };
 
@@ -1011,7 +1038,9 @@
       } else {
         showToast(err.error || 'Failed to restart session', 'error');
       }
+      return false;
     }
+    return true;
   }
 
   // --- Directory Browser ---
