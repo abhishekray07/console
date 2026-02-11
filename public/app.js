@@ -79,34 +79,47 @@
   const mobileNewSession = document.getElementById('mobile-new-session');
 
   // --- Mobile sidebar ---
+  const mobileQuery = window.matchMedia('(max-width: 768px)');
   function isMobile() {
-    return window.matchMedia('(max-width: 768px)').matches;
+    return mobileQuery.matches;
   }
 
   function openMobileSidebar() {
     sidebarEl.classList.add('open');
     sidebarBackdrop.classList.add('visible');
+    document.body.classList.add('sidebar-open');
+    sidebarEl.setAttribute('aria-hidden', 'false');
+    document.getElementById('terminal-container').setAttribute('aria-hidden', 'true');
+    mobileHamburger.setAttribute('aria-label', 'Close menu');
+    // Focus first focusable element in sidebar
+    const firstFocusable = sidebarEl.querySelector('button, [tabindex]:not([tabindex="-1"])');
+    if (firstFocusable) firstFocusable.focus();
   }
 
   function closeMobileSidebar() {
     sidebarEl.classList.remove('open');
     sidebarBackdrop.classList.remove('visible');
+    document.body.classList.remove('sidebar-open');
+    sidebarEl.setAttribute('aria-hidden', 'true');
+    document.getElementById('terminal-container').removeAttribute('aria-hidden');
+    mobileHamburger.setAttribute('aria-label', 'Open menu');
+    mobileHamburger.focus();
   }
 
   function updateMobileTopbar() {
     if (!activeSessionId) {
       mobileSessionName.textContent = 'Claude Console';
       mobileStatusDot.className = 'status-dot';
-      mobileStatusDot.style.display = 'none';
-      mobileNewSession.style.display = 'none';
+      mobileStatusDot.classList.add('hidden');
+      mobileNewSession.classList.add('hidden');
       return;
     }
     const session = sessions.find(s => s.id === activeSessionId);
     if (session) {
       mobileSessionName.textContent = session.name;
       mobileStatusDot.className = 'status-dot ' + (session.alive ? 'alive' : 'exited');
-      mobileStatusDot.style.display = '';
-      mobileNewSession.style.display = '';
+      mobileStatusDot.classList.remove('hidden');
+      mobileNewSession.classList.remove('hidden');
     }
   }
 
@@ -645,16 +658,11 @@
       recentGroup.className = 'project-group';
 
       const recentHeader = document.createElement('div');
-      recentHeader.className = 'project-header';
-      recentHeader.style.pointerEvents = 'none';
+      recentHeader.className = 'project-header mobile-recent-header';
 
       const recentName = document.createElement('span');
-      recentName.className = 'project-name';
+      recentName.className = 'project-name mobile-recent-label';
       recentName.textContent = 'Recent';
-      recentName.style.color = '#6b7280';
-      recentName.style.fontSize = '12px';
-      recentName.style.textTransform = 'uppercase';
-      recentName.style.letterSpacing = '0.05em';
       recentHeader.appendChild(recentName);
       recentGroup.appendChild(recentHeader);
 
@@ -716,9 +724,11 @@
       del.title = 'Delete project';
       del.onclick = (e) => {
         e.stopPropagation();
-        if (confirm(`Delete project "${proj.name}" and all its sessions?`)) {
-          deleteProject(proj.id);
-        }
+        showConfirmDialog(
+          'Delete Project',
+          `Delete "${proj.name}" and all its sessions?`,
+          () => deleteProject(proj.id)
+        );
       };
 
       header.appendChild(arrow);
@@ -1546,7 +1556,7 @@
   });
 
   // Reset sidebar state when crossing breakpoint (e.g. rotating tablet)
-  window.matchMedia('(max-width: 768px)').addEventListener('change', (e) => {
+  mobileQuery.addEventListener('change', (e) => {
     if (!e.matches) {
       closeMobileSidebar();
     }
@@ -1567,6 +1577,12 @@
         if (ul) showInlineSessionInput(ul, session.projectId);
       }
     });
+  });
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && sidebarEl.classList.contains('open')) {
+      closeMobileSidebar();
+    }
   });
 
   // --- Init ---
