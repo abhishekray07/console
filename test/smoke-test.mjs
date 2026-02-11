@@ -234,6 +234,140 @@ try {
   check('Expands on second toggle',
     await page.$eval('#file-tree-section', el => !el.classList.contains('collapsed')));
 
+  // --- Mobile Layout ---
+  console.log('\nSection: Mobile Layout');
+
+  // Resize to mobile viewport
+  await page.setViewportSize({ width: 375, height: 667 });
+  await page.waitForTimeout(1000);
+
+  // Core layout checks
+  check('Mobile topbar visible',
+    await page.$eval('#mobile-topbar', el => getComputedStyle(el).display) === 'flex');
+  check('Right panel hidden on mobile',
+    await page.$eval('#right-panel', el => getComputedStyle(el).display) === 'none');
+  check('Tab bar hidden on mobile',
+    await page.$eval('#tab-bar', el => getComputedStyle(el).display) === 'none');
+  check('Sidebar is fixed-position on mobile',
+    await page.$eval('#sidebar', el => getComputedStyle(el).position) === 'fixed');
+
+  // Test session name in topbar
+  check('Session name shown in topbar',
+    (await page.$eval('#mobile-session-name', el => el.textContent)).includes('Smoke Session'));
+
+  // Test mobile new session button visible
+  check('Mobile new session button visible',
+    await page.$eval('#mobile-new-session', el => getComputedStyle(el).display) !== 'none');
+
+  // Test hamburger opens sidebar
+  await page.click('#mobile-hamburger');
+  await page.waitForTimeout(500);
+  check('Sidebar opens on hamburger click',
+    await page.$eval('#sidebar', el => el.classList.contains('open')));
+  check('Backdrop visible when sidebar open',
+    await page.$eval('#sidebar-backdrop', el => el.classList.contains('visible')));
+
+  // Test touch targets (44px minimum height)
+  const sessionItems = await page.$$('.project-sessions li');
+  check('Session list items found', sessionItems.length > 0, `found ${sessionItems.length}`);
+  if (sessionItems.length > 0) {
+    const itemHeight = await sessionItems[0].evaluate(el => el.getBoundingClientRect().height);
+    check('Session touch target >= 44px', itemHeight >= 44, `got ${Math.round(itemHeight)}px`);
+  }
+
+  // Test backdrop closes sidebar — click at x=350 (right of 240px sidebar)
+  await page.mouse.click(350, 400);
+  await page.waitForTimeout(500);
+  check('Sidebar closes on backdrop click',
+    await page.$eval('#sidebar', el => !el.classList.contains('open')));
+
+  // Test session click closes sidebar
+  await page.click('#mobile-hamburger');
+  await page.waitForTimeout(500);
+  const sessionLi = await page.$('.project-sessions li');
+  if (sessionLi) {
+    await sessionLi.click();
+    await page.waitForTimeout(500);
+    check('Session click closes sidebar',
+      await page.$eval('#sidebar', el => !el.classList.contains('open')));
+  }
+
+  // Test new session button opens sidebar
+  await page.click('#mobile-new-session');
+  await page.waitForTimeout(500);
+  check('New session button opens sidebar',
+    await page.$eval('#sidebar', el => el.classList.contains('open')));
+  await page.mouse.click(350, 400);
+  await page.waitForTimeout(500);
+
+  // Test modal z-index above sidebar backdrop
+  await page.click('#mobile-hamburger');
+  await page.waitForTimeout(500);
+  await page.click('#btn-add-project');
+  await page.waitForTimeout(500);
+  const modalZ = await page.$eval('#modal-overlay', el => parseInt(getComputedStyle(el).zIndex));
+  const backdropZ = await page.$eval('#sidebar-backdrop', el => parseInt(getComputedStyle(el).zIndex));
+  check('Modal z-index above sidebar backdrop', modalZ > backdropZ,
+    `modal=${modalZ}, backdrop=${backdropZ}`);
+  await page.click('#btn-modal-cancel');
+  await page.waitForTimeout(300);
+  await page.mouse.click(350, 400);
+  await page.waitForTimeout(500);
+
+  // Test Recent sessions section visible on mobile
+  await page.click('#mobile-hamburger');
+  await page.waitForTimeout(500);
+  const recentText = await page.$eval('.mobile-recent-label', el => el.textContent).catch(() => '');
+  check('Recent sessions section visible', recentText === 'Recent');
+
+  // Test session actions always visible on mobile
+  const sessionActionsDisplay = await page.$eval('.session-actions',
+    el => getComputedStyle(el).display).catch(() => 'none');
+  check('Session actions visible on mobile', sessionActionsDisplay === 'flex');
+
+  // Test project delete always visible on mobile
+  const projDeleteDisplay = await page.$eval('.project-delete',
+    el => getComputedStyle(el).display).catch(() => 'none');
+  check('Project delete visible on mobile', projDeleteDisplay !== 'none');
+
+  // Test project header touch target (skip the non-interactive Recent header)
+  const projHeaderHeight = await page.$eval('.project-header:not(.mobile-recent-header)',
+    el => el.getBoundingClientRect().height);
+  check('Project header touch target >= 44px', projHeaderHeight >= 44,
+    `got ${Math.round(projHeaderHeight)}px`);
+
+  // Test mobileSessionInfo click opens sidebar
+  await page.mouse.click(350, 400);
+  await page.waitForTimeout(500);
+  await page.click('#mobile-session-info');
+  await page.waitForTimeout(500);
+  check('Session info click opens sidebar',
+    await page.$eval('#sidebar', el => el.classList.contains('open')));
+
+  // Test breakpoint crossing closes sidebar (sidebar is currently open)
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.waitForTimeout(1000);
+  check('Breakpoint crossing closes sidebar',
+    await page.$eval('#sidebar', el => !el.classList.contains('open')));
+
+  // Return to mobile viewport for remaining checks
+  await page.setViewportSize({ width: 375, height: 667 });
+  await page.waitForTimeout(1000);
+
+  // Restore desktop viewport and verify layout restoration
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.waitForTimeout(1000);
+  check('Right panel visible after restore',
+    await page.$eval('#right-panel', el => getComputedStyle(el).display) !== 'none');
+  check('Tab bar visible after restore',
+    await page.$eval('#tab-bar', el => getComputedStyle(el).display) !== 'none');
+  check('Mobile topbar hidden after restore',
+    await page.$eval('#mobile-topbar', el => getComputedStyle(el).display) === 'none');
+  check('Sidebar not fixed after restore',
+    await page.$eval('#sidebar', el => getComputedStyle(el).position) !== 'fixed');
+  check('Sidebar aria-hidden after restore',
+    await page.$eval('#sidebar', el => el.getAttribute('aria-hidden')) === 'true');
+
   // --- Directory Expand ---
   console.log('\nSection: Directory Expand');
   await page.locator('.file-tree-folder:has-text("src")').first().click();

@@ -69,6 +69,60 @@
   const btnToggleFileTree = document.getElementById('btn-toggle-file-tree');
   const fileTreeSection = document.getElementById('file-tree-section');
 
+  // --- Mobile responsive DOM refs ---
+  const sidebarEl = document.getElementById('sidebar');
+  const sidebarBackdrop = document.getElementById('sidebar-backdrop');
+  const mobileHamburger = document.getElementById('mobile-hamburger');
+  const mobileSessionInfo = document.getElementById('mobile-session-info');
+  const mobileSessionName = document.getElementById('mobile-session-name');
+  const mobileStatusDot = document.getElementById('mobile-status-dot');
+  const mobileNewSession = document.getElementById('mobile-new-session');
+
+  // --- Mobile sidebar ---
+  const mobileQuery = window.matchMedia('(max-width: 768px)');
+  function isMobile() {
+    return mobileQuery.matches;
+  }
+
+  function openMobileSidebar() {
+    sidebarEl.classList.add('open');
+    sidebarBackdrop.classList.add('visible');
+    document.body.classList.add('sidebar-open');
+    sidebarEl.setAttribute('aria-hidden', 'false');
+    document.getElementById('terminal-container').setAttribute('aria-hidden', 'true');
+    mobileHamburger.setAttribute('aria-label', 'Close menu');
+    // Focus first focusable element in sidebar
+    const firstFocusable = sidebarEl.querySelector('button, [tabindex]:not([tabindex="-1"])');
+    if (firstFocusable) firstFocusable.focus();
+  }
+
+  function closeMobileSidebar() {
+    sidebarEl.classList.remove('open');
+    sidebarBackdrop.classList.remove('visible');
+    document.body.classList.remove('sidebar-open');
+    sidebarEl.setAttribute('aria-hidden', 'true');
+    document.getElementById('terminal-container').removeAttribute('aria-hidden');
+    mobileHamburger.setAttribute('aria-label', 'Open menu');
+    mobileHamburger.focus();
+  }
+
+  function updateMobileTopbar() {
+    if (!activeSessionId) {
+      mobileSessionName.textContent = 'Claude Console';
+      mobileStatusDot.className = 'status-dot';
+      mobileStatusDot.classList.add('hidden');
+      mobileNewSession.classList.add('hidden');
+      return;
+    }
+    const session = sessions.find(s => s.id === activeSessionId);
+    if (session) {
+      mobileSessionName.textContent = session.name;
+      mobileStatusDot.className = 'status-dot ' + (session.alive ? 'alive' : 'exited');
+      mobileStatusDot.classList.remove('hidden');
+      mobileNewSession.classList.remove('hidden');
+    }
+  }
+
   // --- Helpers ---
   function wsSend(data) {
     if (ws && ws.readyState === WebSocket.OPEN) {
@@ -221,17 +275,20 @@
 
     fitAddon = new FitAddon.FitAddon();
     const webLinksAddon = new WebLinksAddon.WebLinksAddon();
-    const webglAddon = new WebglAddon.WebglAddon();
-
     term.loadAddon(fitAddon);
     term.loadAddon(webLinksAddon);
     term.open(terminalEl);
 
-    // WebGL addon for sharper rendering on high-DPI displays
-    try {
-      term.loadAddon(webglAddon);
-    } catch (e) {
-      console.warn('WebGL addon failed, using canvas renderer');
+    // WebGL addon for sharper rendering — skip on mobile (GPU issues on low-end devices).
+    // This check runs once at init. Addons can't be unloaded, so viewport changes after
+    // init won't toggle WebGL. Desktop users always get WebGL; mobile always gets canvas.
+    if (!isMobile()) {
+      try {
+        const webglAddon = new WebglAddon.WebglAddon();
+        term.loadAddon(webglAddon);
+      } catch (e) {
+        console.warn('WebGL addon failed, using canvas renderer');
+      }
     }
 
     fitAddon.fit();
@@ -332,11 +389,13 @@
     shellTerm.loadAddon(webLinksAddon);
     shellTerm.open(shellTerminalEl);
 
-    try {
-      const webglAddon = new WebglAddon.WebglAddon();
-      shellTerm.loadAddon(webglAddon);
-    } catch (e) {
-      console.warn('Shell WebGL addon failed, using canvas renderer');
+    if (!isMobile()) {
+      try {
+        const webglAddon = new WebglAddon.WebglAddon();
+        shellTerm.loadAddon(webglAddon);
+      } catch (e) {
+        console.warn('Shell WebGL addon failed, using canvas renderer');
+      }
     }
 
     shellFitAddon.fit();
@@ -460,8 +519,10 @@
             fileViewer.classList.add('hidden');
             document.getElementById('terminal-wrapper').style.display = '';
             document.getElementById('terminal-wrapper').style.inset = '0';
+            updateMobileTopbar();
           }
           renderSidebar();
+          updateMobileTopbar();
           break;
 
         case 'session-deleted':
@@ -474,12 +535,14 @@
             fileViewer.classList.add('hidden');
             document.getElementById('terminal-wrapper').style.display = '';
             document.getElementById('terminal-wrapper').style.inset = '0';
+            updateMobileTopbar();
           }
           break;
 
         case 'exited':
           // Session still exists, just re-render sidebar to update status dot
           renderSidebar();
+          updateMobileTopbar();
           break;
 
         case 'shell-output':
@@ -507,6 +570,20 @@
               });
             });
           }
+          break;
+
+        case 'image-upload-ok':
+          if (msg.path) {
+            navigator.clipboard.writeText(msg.path).then(() => {
+              showToast('Image saved — path copied to clipboard', 'success', 4000);
+            }).catch(() => {
+              showToast('Image saved: ' + msg.path, 'success', 6000);
+            });
+          }
+          break;
+
+        case 'image-upload-error':
+          showToast(msg.error || 'Image upload failed', 'error');
           break;
       }
     };
@@ -582,11 +659,60 @@
 
     term.focus();
     renderSidebar();
+    updateMobileTopbar();
   }
 
   // --- Sidebar ---
   function renderSidebar() {
     projectListEl.innerHTML = '';
+
+    // Mobile: show flat "Recent" section for quick session switching
+    if (isMobile() && sessions.length > 0) {
+      const recentSessions = [...sessions]
+        .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+        .slice(0, 5);
+
+      const recentGroup = document.createElement('div');
+      recentGroup.className = 'project-group';
+
+      const recentHeader = document.createElement('div');
+      recentHeader.className = 'project-header mobile-recent-header';
+
+      const recentName = document.createElement('span');
+      recentName.className = 'project-name mobile-recent-label';
+      recentName.textContent = 'Recent';
+      recentHeader.appendChild(recentName);
+      recentGroup.appendChild(recentHeader);
+
+      const recentUl = document.createElement('ul');
+      recentUl.className = 'project-sessions expanded';
+
+      for (const s of recentSessions) {
+        const li = document.createElement('li');
+        if (s.id === activeSessionId) li.classList.add('active');
+
+        const dot = document.createElement('span');
+        dot.className = 'status-dot ' + (s.alive ? 'alive' : 'exited');
+
+        const sName = document.createElement('span');
+        sName.className = 'session-name';
+        sName.textContent = s.name;
+
+        li.appendChild(dot);
+        li.appendChild(sName);
+        li.onclick = () => {
+          if (!s.alive && s.claudeSessionId) {
+            restartSession(s.id);
+          }
+          attachSession(s.id);
+          closeMobileSidebar();
+        };
+        recentUl.appendChild(li);
+      }
+
+      recentGroup.appendChild(recentUl);
+      projectListEl.appendChild(recentGroup);
+    }
 
     // Sort projects by createdAt ascending (design spec)
     const sortedProjects = [...projects].sort((a, b) =>
@@ -616,9 +742,11 @@
       del.title = 'Delete project';
       del.onclick = (e) => {
         e.stopPropagation();
-        if (confirm(`Delete project "${proj.name}" and all its sessions?`)) {
-          deleteProject(proj.id);
-        }
+        showConfirmDialog(
+          'Delete Project',
+          `Delete "${proj.name}" and all its sessions?`,
+          () => deleteProject(proj.id)
+        );
       };
 
       header.appendChild(arrow);
@@ -721,6 +849,7 @@
           } else {
             attachSession(s.id);
           }
+          closeMobileSidebar();
         };
 
         ul.appendChild(li);
@@ -860,6 +989,7 @@
       term.reset();
       noSession.classList.remove('hidden');
       rightPanel.classList.add('hidden');
+      updateMobileTopbar();
     }
   }
 
@@ -1404,6 +1534,83 @@
       document.body.style.cursor = '';
       document.body.style.userSelect = '';
       if (shellFitAddon) shellFitAddon.fit();
+    }
+  });
+
+  // --- Clipboard Image Paste ---
+
+  document.addEventListener('paste', (e) => {
+    if (!activeSessionId) return;
+
+    const items = e.clipboardData?.items;
+    if (!items) return;
+
+    const imageItem = Array.from(items).find(i => i.type.startsWith('image/'));
+    if (!imageItem) return; // Not an image paste, let xterm handle it
+
+    e.preventDefault();
+    e.stopPropagation();
+
+    const blob = imageItem.getAsFile();
+    if (!blob) return;
+
+    showToast('Uploading image...', 'info', 2000);
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      const b64 = reader.result.split(',')[1]; // strip data:image/...;base64, prefix
+      wsSend(JSON.stringify({ type: 'image-upload', sessionId: activeSessionId, data: b64 }));
+    };
+    reader.onerror = () => {
+      showToast('Failed to read image from clipboard', 'error');
+    };
+    reader.readAsDataURL(blob);
+  });
+
+  // --- Mobile event listeners ---
+  mobileHamburger.addEventListener('click', () => {
+    if (sidebarEl.classList.contains('open')) {
+      closeMobileSidebar();
+    } else {
+      openMobileSidebar();
+    }
+  });
+
+  mobileSessionInfo.addEventListener('click', () => {
+    openMobileSidebar();
+  });
+
+  sidebarBackdrop.addEventListener('click', () => {
+    closeMobileSidebar();
+  });
+
+  // Reset sidebar state when crossing breakpoint (e.g. rotating tablet)
+  mobileQuery.addEventListener('change', (e) => {
+    if (!e.matches) {
+      closeMobileSidebar();
+    }
+  });
+
+  mobileNewSession.addEventListener('click', () => {
+    if (!activeSessionId) return;
+    const session = sessions.find(s => s.id === activeSessionId);
+    if (!session) return;
+    // Open sidebar and trigger inline input on the active project
+    openMobileSidebar();
+    expandedProjects.add(session.projectId);
+    renderSidebar();
+    requestAnimationFrame(() => {
+      const projGroup = projectListEl.querySelector(`[data-project-id="${session.projectId}"]`);
+      if (projGroup) {
+        const ul = projGroup.querySelector('.project-sessions');
+        if (ul) showInlineSessionInput(ul, session.projectId);
+      }
+    });
+  });
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && sidebarEl.classList.contains('open')) {
+      closeMobileSidebar();
     }
   });
 
