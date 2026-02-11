@@ -93,6 +93,23 @@
     sidebarBackdrop.classList.remove('visible');
   }
 
+  function updateMobileTopbar() {
+    if (!activeSessionId) {
+      mobileSessionName.textContent = 'Claude Console';
+      mobileStatusDot.className = 'status-dot';
+      mobileStatusDot.style.display = 'none';
+      mobileNewSession.style.display = 'none';
+      return;
+    }
+    const session = sessions.find(s => s.id === activeSessionId);
+    if (session) {
+      mobileSessionName.textContent = session.name;
+      mobileStatusDot.className = 'status-dot ' + (session.alive ? 'alive' : 'exited');
+      mobileStatusDot.style.display = '';
+      mobileNewSession.style.display = '';
+    }
+  }
+
   // --- Helpers ---
   function wsSend(data) {
     if (ws && ws.readyState === WebSocket.OPEN) {
@@ -477,8 +494,10 @@
             fileViewer.classList.add('hidden');
             document.getElementById('terminal-wrapper').style.display = '';
             document.getElementById('terminal-wrapper').style.inset = '0';
+            updateMobileTopbar();
           }
           renderSidebar();
+          updateMobileTopbar();
           break;
 
         case 'session-deleted':
@@ -491,12 +510,14 @@
             fileViewer.classList.add('hidden');
             document.getElementById('terminal-wrapper').style.display = '';
             document.getElementById('terminal-wrapper').style.inset = '0';
+            updateMobileTopbar();
           }
           break;
 
         case 'exited':
           // Session still exists, just re-render sidebar to update status dot
           renderSidebar();
+          updateMobileTopbar();
           break;
 
         case 'shell-output':
@@ -602,6 +623,7 @@
 
     term.focus();
     renderSidebar();
+    updateMobileTopbar();
   }
 
   // --- Sidebar ---
@@ -872,6 +894,7 @@
       term.reset();
       noSession.classList.remove('hidden');
       rightPanel.classList.add('hidden');
+      updateMobileTopbar();
     }
   }
 
