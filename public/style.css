@@ -899,6 +899,10 @@ body {
 /* --- Mobile responsive: layout (max-width: 768px) --- */
 
 @media (max-width: 768px) {
+  :root {
+    --mobile-topbar-height: calc(44px + env(safe-area-inset-top));
+  }
+
   /* Sidebar: off-screen fixed overlay */
   #sidebar {
     position: fixed;
@@ -911,6 +915,7 @@ body {
     will-change: transform;
     padding-top: env(safe-area-inset-top);
     padding-bottom: env(safe-area-inset-bottom);
+    overscroll-behavior: contain;
   }
   #sidebar.open {
     transform: translateX(0);
@@ -951,7 +956,8 @@ body {
   #mobile-topbar {
     display: flex;
     align-items: center;
-    height: calc(44px + env(safe-area-inset-top));
+    height: 44px;
+    height: var(--mobile-topbar-height);
     padding-top: env(safe-area-inset-top);
     padding-left: 8px;
     padding-right: 8px;
@@ -1020,17 +1026,17 @@ body {
      This is safe because tab-bar is hidden on mobile, so the JS inset values (32px for
      tab bar offset, 0 for no tabs) are irrelevant — mobile always needs topbar offset. */
   #terminal-wrapper {
-    inset: calc(44px + env(safe-area-inset-top)) 0 0 0 !important;
+    inset: var(--mobile-topbar-height) 0 env(safe-area-inset-bottom) 0 !important;
   }
 
   /* No-session placeholder: offset below topbar */
   #no-session {
-    inset: calc(44px + env(safe-area-inset-top)) 0 0 0;
+    inset: var(--mobile-topbar-height) 0 env(safe-area-inset-bottom) 0;
   }
 
   /* File viewer: offset below topbar (hidden on mobile but just in case) */
   #file-viewer {
-    inset: calc(44px + env(safe-area-inset-top)) 0 0 0;
+    inset: var(--mobile-topbar-height) 0 env(safe-area-inset-bottom) 0;
   }
 
   /* --- Touch targets & mobile polish --- */
@@ -1060,9 +1066,45 @@ body {
     display: flex !important;
   }
 
-  /* Project delete: always visible on mobile */
+  /* Action button touch targets */
+  .session-delete,
+  .session-archive {
+    min-width: 44px;
+    min-height: 44px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
   .project-delete {
-    display: block !important;
+    min-width: 44px;
+    min-height: 44px;
+    display: flex !important;
+    align-items: center;
+    justify-content: center;
+  }
+
+  /* Prevent iOS Safari auto-zoom on input focus (requires >= 16px) */
+  .inline-session-input,
+  #modal-project-name,
+  #modal-project-path {
+    font-size: 16px;
+  }
+
+  /* Recent sessions section header */
+  .mobile-recent-header {
+    pointer-events: none;
+    min-height: auto;
+  }
+  .mobile-recent-label {
+    color: #6b7280;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  /* Prevent body scroll when sidebar overlay is open */
+  body.sidebar-open {
+    overflow: hidden;
   }
 
   /* Toast: full-width centered on mobile with safe area */
