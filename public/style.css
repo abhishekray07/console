@@ -5,12 +5,14 @@ body {
   color: #e0e0e0;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   height: 100vh;
+  height: 100dvh;
   overflow: hidden;
 }
 
 #app {
   display: flex;
   height: 100vh;
+  height: 100dvh;
 }
 
 /* --- Sidebar --- */
@@ -888,4 +890,14 @@ body {
   justify-content: center;
   color: #6b7280;
   font-size: 14px;
+}
+
+/* --- Mobile responsive: base styles (hidden on desktop) --- */
+
+#mobile-topbar {
+  display: none;
+}
+
+#sidebar-backdrop {
+  display: none;
 }
