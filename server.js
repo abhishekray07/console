@@ -853,6 +853,7 @@ export function createServer({ testMode = false } = {}) {
     let claudeBatchTimer = null;
     let shellBatch = '';
     let shellBatchTimer = null;
+    let resizeNudgeTimer = null;
 
     function flushClaudeBatch() {
       clearTimeout(claudeBatchTimer);
@@ -977,7 +978,17 @@ export function createServer({ testMode = false } = {}) {
 
         case 'resize': {
           if (attachedSessionId && msg.cols && msg.rows) {
-            manager.resize(attachedSessionId, msg.cols, msg.rows);
+            // SIGWINCH nudge: bounce resize to force Ink (Claude's TUI) to
+            // fully repaint the text input area. Uses a cancelable timer so
+            // rapid resizes (e.g. window drag) don't stack stale timeouts.
+            clearTimeout(resizeNudgeTimer);
+            const nudgeCols = Math.max(msg.cols - 1, 1);
+            manager.resize(attachedSessionId, nudgeCols, msg.rows);
+            resizeNudgeTimer = setTimeout(() => {
+              if (attachedSessionId && manager.isAlive(attachedSessionId)) {
+                manager.resize(attachedSessionId, msg.cols, msg.rows);
+              }
+            }, 50);
           }
           break;
         }
