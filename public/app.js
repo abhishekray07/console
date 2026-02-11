@@ -262,17 +262,20 @@
 
     fitAddon = new FitAddon.FitAddon();
     const webLinksAddon = new WebLinksAddon.WebLinksAddon();
-    const webglAddon = new WebglAddon.WebglAddon();
-
     term.loadAddon(fitAddon);
     term.loadAddon(webLinksAddon);
     term.open(terminalEl);
 
-    // WebGL addon for sharper rendering on high-DPI displays
-    try {
-      term.loadAddon(webglAddon);
-    } catch (e) {
-      console.warn('WebGL addon failed, using canvas renderer');
+    // WebGL addon for sharper rendering — skip on mobile (GPU issues on low-end devices).
+    // This check runs once at init. Addons can't be unloaded, so viewport changes after
+    // init won't toggle WebGL. Desktop users always get WebGL; mobile always gets canvas.
+    if (!isMobile()) {
+      try {
+        const webglAddon = new WebglAddon.WebglAddon();
+        term.loadAddon(webglAddon);
+      } catch (e) {
+        console.warn('WebGL addon failed, using canvas renderer');
+      }
     }
 
     fitAddon.fit();
@@ -373,11 +376,13 @@
     shellTerm.loadAddon(webLinksAddon);
     shellTerm.open(shellTerminalEl);
 
-    try {
-      const webglAddon = new WebglAddon.WebglAddon();
-      shellTerm.loadAddon(webglAddon);
-    } catch (e) {
-      console.warn('Shell WebGL addon failed, using canvas renderer');
+    if (!isMobile()) {
+      try {
+        const webglAddon = new WebglAddon.WebglAddon();
+        shellTerm.loadAddon(webglAddon);
+      } catch (e) {
+        console.warn('Shell WebGL addon failed, using canvas renderer');
+      }
     }
 
     shellFitAddon.fit();
@@ -1492,6 +1497,23 @@
     if (!e.matches) {
       closeMobileSidebar();
     }
+  });
+
+  mobileNewSession.addEventListener('click', () => {
+    if (!activeSessionId) return;
+    const session = sessions.find(s => s.id === activeSessionId);
+    if (!session) return;
+    // Open sidebar and trigger inline input on the active project
+    openMobileSidebar();
+    expandedProjects.add(session.projectId);
+    renderSidebar();
+    requestAnimationFrame(() => {
+      const projGroup = projectListEl.querySelector(`[data-project-id="${session.projectId}"]`);
+      if (projGroup) {
+        const ul = projGroup.querySelector('.project-sessions');
+        if (ul) showInlineSessionInput(ul, session.projectId);
+      }
+    });
   });
 
   // --- Init ---
